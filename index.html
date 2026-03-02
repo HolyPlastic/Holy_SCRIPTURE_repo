@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Holy Scripture</title>
+
+    <!-- Google Fonts: Share Tech Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+    <!-- CodeMirror 5 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.css">
+
+    <!-- Holy Scripture styles -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ── CRT OVERLAY ──────────────────────────────────────────── -->
+<div class="crt-scanlines"></div>
+
+<!-- ── BACKGROUND GRID ──────────────────────────────────────── -->
+<svg class="hp-grid-bg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <pattern id="hp-layout-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+            <path d="M 8 0 L 0 0 0 8" fill="none" stroke="#1A1A1A" stroke-width="0.5"/>
+        </pattern>
+        <pattern id="hp-major-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+            <rect width="32" height="32" fill="url(#hp-layout-grid)"/>
+            <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#2E2E2E" stroke-width="1"/>
+        </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#hp-major-grid)"/>
+</svg>
+
+<!-- ── APP ──────────────────────────────────────────────────── -->
+<div id="app">
+
+    <!-- HEADER -->
+    <header id="header">
+        <div class="header-brand">☩ <span>HOLY</span> SCRIPTURE</div>
+        <div style="font-size:9px; color: var(--hp-signal-dim); letter-spacing:0.1em;">v1.0</div>
+    </header>
+
+    <!-- AE CONTEXT BAR -->
+    <div id="context-bar">
+        <div class="ctx-cell" id="ctx-comp" style="flex:1; min-width:0;">
+            <span class="ctx-dot" id="ctx-dot"></span>
+            <span id="ctx-comp-name">NO COMP</span>
+        </div>
+        <div class="ctx-cell" id="ctx-fps-cell">–</div>
+        <div class="ctx-cell" id="ctx-layers-cell">0 LYR</div>
+        <div class="ctx-cell" id="ctx-timecode-cell">00:00:00:00</div>
+    </div>
+
+    <!-- TAB NAV -->
+    <nav id="tab-nav">
+        <button class="tab-btn active" data-tab="editor">EDITOR</button>
+        <button class="tab-btn" data-tab="slots">SLOTS</button>
+        <button class="tab-btn" data-tab="library">LIBRARY</button>
+        <button class="tab-btn" data-tab="history">LOG</button>
+    </nav>
+
+    <!-- TAB CONTENT -->
+    <div id="tab-content">
+
+        <!-- ── EDITOR TAB ──────────────────────────────────── -->
+        <div class="tab-panel active" id="tab-editor">
+
+            <!-- CodeMirror mounts here -->
+            <div id="editor-container">
+                <textarea id="editor-fallback" spellcheck="false" placeholder="// Write your ExtendScript here..."></textarea>
+            </div>
+
+            <!-- Action bar -->
+            <div id="editor-actions">
+                <button class="btn-primary btn-full" id="btn-run">▶ CAST SCRIPT</button>
+                <button class="btn-secondary" id="btn-save" title="Save to Library">✚ SAVE</button>
+            </div>
+
+            <!-- Inline console -->
+            <div id="console-panel">
+                <div id="console-header">
+                    <span>OUTPUT</span>
+                    <button class="btn-ghost" id="btn-clear-console" style="padding:1px 6px; font-size:9px;">✕ CLEAR</button>
+                </div>
+                <div id="console-output">
+                    <span class="console-line console-ready">&gt; READY_</span>
+                </div>
+            </div>
+
+        </div><!-- /tab-editor -->
+
+        <!-- ── SLOTS TAB ───────────────────────────────────── -->
+        <div class="tab-panel" id="tab-slots">
+
+            <div class="slots-toolbar">
+                <span class="tab-label">QUICK SLOTS</span>
+                <button class="btn-secondary" id="btn-add-slot" style="padding:4px 10px; font-size:9px;">+ ADD SLOT</button>
+            </div>
+
+            <div id="slots-list">
+                <!-- Slots rendered by JS -->
+            </div>
+
+            <div id="slots-empty" class="empty-state" style="display:none;">
+                <span>NO SLOTS</span>
+                <span class="sub">PRESS + ADD SLOT TO BEGIN</span>
+            </div>
+
+        </div><!-- /tab-slots -->
+
+        <!-- ── LIBRARY TAB ─────────────────────────────────── -->
+        <div class="tab-panel" id="tab-library">
+
+            <div class="library-toolbar">
+                <input type="text" id="library-search" class="search-input" placeholder="SEARCH SCRIPTURES...">
+                <button class="btn-secondary" id="btn-import-jsx" style="padding:7px 10px; font-size:9px; flex-shrink:0; border-left: 1px solid var(--hp-border);">IMPORT .JSX</button>
+            </div>
+
+            <div id="library-list">
+                <!-- Library items rendered by JS -->
+            </div>
+
+            <div id="library-empty" class="empty-state">
+                <span>NO SCRIPTURES SAVED</span>
+                <span class="sub">RUN A SCRIPT AND HIT ✚ SAVE</span>
+            </div>
+
+        </div><!-- /tab-library -->
+
+        <!-- ── HISTORY TAB ─────────────────────────────────── -->
+        <div class="tab-panel" id="tab-history">
+
+            <div class="history-toolbar">
+                <span class="tab-label">RUN LOG</span>
+                <button class="btn-danger" id="btn-clear-history" style="padding:4px 10px; font-size:9px;">CLEAR</button>
+            </div>
+
+            <div id="history-list">
+                <!-- History items rendered by JS -->
+            </div>
+
+            <div id="history-empty" class="empty-state">
+                <span>NO RUNS YET</span>
+                <span class="sub">CAST A SCRIPT TO BEGIN LOGGING</span>
+            </div>
+
+        </div><!-- /tab-history -->
+
+    </div><!-- /tab-content -->
+
+</div><!-- /app -->
+
+<!-- ── SAVE MODAL ────────────────────────────────────────────── -->
+<div id="modal-overlay">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">✚ SAVE TO LIBRARY</span>
+            <button class="btn-ghost" id="btn-modal-close" style="padding:2px 6px;">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="modal-field">
+                <label>Script Name</label>
+                <input type="text" id="modal-name" placeholder="MY SCRIPT" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="modal-field">
+                <label>Category</label>
+                <select id="modal-category">
+                    <option value="">— UNCATEGORISED —</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>New Category (optional)</label>
+                <input type="text" id="modal-new-category" placeholder="E.G. TEXT TOOLS" autocomplete="off" spellcheck="false">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-primary" id="btn-modal-confirm">SAVE</button>
+            <button class="btn-secondary" id="btn-modal-cancel">CANCEL</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── SCRIPTS ───────────────────────────────────────────────── -->
+
+<!-- CEP Interface -->
+<script src="js/CSInterface.js"></script>
+
+<!-- CodeMirror 5 + JS mode + addons -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+
+<!-- Holy Scripture main logic -->
+<script src="js/main.js"></script>
+
+</body>
+</html>
