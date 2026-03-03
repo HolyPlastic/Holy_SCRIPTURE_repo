@@ -3,16 +3,14 @@
     Version="7.0"
     ExtensionBundleId="com.holyplastic.holyscripture"
     ExtensionBundleVersion="1.0.0"
-    ExtensionBundleName="Holy Scripture">
-
-    <ExtensionList>
+    ExtensionBundleName="Holy Scripture"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"> <ExtensionList>
         <Extension Id="com.holyplastic.holyscripture.panel" Version="1.0.0"/>
     </ExtensionList>
 
     <ExecutionEnvironment>
         <HostList>
-            <Host Name="AEFT" Version="[0, 99]"/>
-        </HostList>
+            <Host Name="AEFT" Version="[15.0, 99.9]"/> </HostList>
         <LocaleList>
             <Locale Code="All"/>
         </LocaleList>
