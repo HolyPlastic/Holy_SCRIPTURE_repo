@@ -99,6 +99,40 @@ HOLY SCRIPTURE/
 - [x] Live comp name, fps, layer count, timecode
 - [x] 2s polling interval
 
+### Phase 6 — Script Parameters (BUILT — session 3)
+- [x] Collapsible params panel below editor action bar (`#params-panel`)
+- [x] Types: string, number, boolean, color
+- [x] Preamble injected before user code on run
+- [x] Params saved with library scripts; restored on library load
+- [x] Add/remove param rows; type change resets value to sensible default
+
+### Phase 7 — Drag-Drop .jsx Import (BUILT — session 3)
+- [x] HTML5 FileReader drag-drop on `document.body`
+- [x] Drop on Library tab → opens save modal pre-filled with filename
+- [x] Drop on any other tab → loads into editor
+- [x] Visual overlay (`body.drag-active::after`) during drag
+- [x] Filters: only `.jsx` / `.js` files accepted
+
+### Phase 8 — Customizable Slot Shortcuts (BUILT — session 3)
+- [x] `shortcut: null` field on each slot object
+- [x] Shortcut pill button in slot header: click to record, ESC to cancel, Backspace to clear
+- [x] Recording mode: next keypress (any combo) becomes the shortcut
+- [x] Global keydown listener fires matching slot's run function
+- [x] Visual: pill turns accent when set, orange pulse during recording
+
+### Phase 9 — Macro Builder (BUILT — session 3)
+- [x] 5th tab: MACRO (`#tab-macro`, `data-tab="macro"`)
+- [x] Build chain by picking scripts from library picker dropdown + "ADD STEP"
+- [x] Each step: name, drag-to-reorder, delay (ms) input, remove button
+- [x] HTML5 drag-reorder within chain (no library needed)
+- [x] CAST MACRO: runs steps in sequence, each awaiting callback before next
+- [x] ON ERROR select: ABORT (stops on first failure) or CONTINUE
+- [x] Step status indicators: running (pulse), ok (green border), error (red border)
+- [x] SAVE MACRO: stores to `hs_macros` in localStorage
+- [x] Saved macros list: cast-directly, load-into-builder, delete
+- [x] Macro run logged to history as single grouped entry
+- [x] Macro picker auto-refreshes when switching to macro tab
+
 ---
 
 ## KNOWN LIMITATIONS / FUTURE WORK
@@ -137,3 +171,133 @@ HOLY SCRIPTURE/
 | `--hp-signal-secondary-2` | `#FFB800` | Yellow accent |
 | `--hp-danger` | `#FF2D2D` | Errors |
 | `--hp-signal-dim` | `#666666` | Inactive/placeholder |
+
+> **NOTE — Design Overhaul:** The design system has been substantially revised since the original session. The live CSS no longer uses the token names above. Current design system (as of session 2):
+> - Accent: `#ff2c72` (--accent, was --hp-signal-MAIN)
+> - Backgrounds: base `#111214`, panel `#18191d`, surface `#20222a`, input `#0e0f12`
+> - Fonts: UI = `system-ui/-apple-system/'Segoe UI'`, Mono = `'Share Tech Mono'`, Label = `'Dosis'`
+> - Legacy aliases kept in `:root` for JS/CodeMirror compat
+> The BRAND REFERENCE table above is now historical. See `css/style.css` for current token values.
+
+---
+
+## HANDOFF — SESSION 2 (2026-03-04)
+
+### Confirmed built and present in codebase:
+- Phase 1: Editor (CodeMirror 5, custom holyscripture theme, inline console, Ctrl+Enter run)
+- Phase 2: Quick Slots (+/− add/remove, collapse/expand, localStorage persistence, run from slot)
+- Phase 3: Library (save with name/category, search, run/load/delete from library)
+- Phase 4: History (full run log, reload to editor, re-run, clear history)
+- Phase 5: AE Context Bar (live comp name, fps, layer count, timecode via 2s poll)
+
+### Confirmed NOT yet built:
+- ~~Script Parameters injection (Phase 6)~~ → **BUILT (session 3)**
+- ~~Macro / Script Chaining builder (Phase 7)~~ → **BUILT (session 3)**
+- ~~Slot keyboard shortcuts~~ → **BUILT — customizable, recorded per-slot (session 3)**
+- ~~.jsx file import (button present in Library tab)~~ → **BUILT — drag-drop (session 3)**
+- Local asset bundling (CodeMirror + Google Fonts still loaded from CDN)
+- localStorage → `window.cep.fs` JSON file migration
+
+### Design state:
+- Full design overhaul completed in session 2 (new color system, typography, layout polish)
+- `index.html`, `css/style.css` reflect the current design — BUILD NOTES brand table is now outdated
+- Tab structure: `#tab-editor`, `#tab-slots`, `#tab-library`, `#tab-history` — all present
+
+---
+
+## NEXT PHASES — PLAN
+
+### Phase 6 — Script Parameters
+**Concept:** Before running a script, the user can define named key/value pairs that get injected as variables at the top of the evaluated code. This makes scripts reusable without editing code.
+
+**Implementation:**
+- UI: collapsible "Parameters" panel below the editor, with rows of [key] [type] [value] [remove]
+- Types: `string`, `number`, `boolean`, `color` (hex picker)
+- On run: serialize params into a preamble string like `var layerName = "BG"; var duration = 2.5;` and prepend to user code before eval
+- Params saved per-library-script: when loading from library, params load with it
+- "Add param" button adds a new row; remove button on each row
+- Default state: panel hidden/collapsed, expands on click
+
+**Files touched:** `index.html` (params panel markup), `css/style.css` (param row styles), `js/main.js` (param serialization + load/save logic), `jsx/hostscript.jsx` (no changes needed — preamble is prepended in JS before handoff)
+
+**Scope notes:** Keep it simple — no type coercion validation for v1. Trust the user to match types to their script.
+
+---
+
+### Phase 7 — .jsx Import (Quick Win, Low Hanging)
+**Concept:** Wire up the existing Import button in the Library tab to actually open a file picker and load the file into the library.
+
+**Implementation:**
+- Use `csInterface.openFileDialog()` (CEP native) to open a system file picker filtered to `.jsx, .js`
+- Read the selected file via `window.cep.fs.readFile()`
+- Prompt the user for a name (pre-fill with filename minus extension)
+- Save to library as a new entry
+
+**Files touched:** `js/main.js` only (import button handler already stubbed)
+
+**Scope notes:** This is a quick win — the button is already in the UI. Should be < 50 lines of new JS.
+
+---
+
+### Phase 8 — Slot Keyboard Shortcuts
+**Concept:** Alt+1 through Alt+8 trigger the corresponding Quick Slot's run action.
+
+**Implementation:**
+- `document.addEventListener('keydown', ...)` in main.js
+- Check `e.altKey && e.key` matches '1'–'8'
+- Map index to slot and call the slot's run function
+- Show a brief visual flash on the slot to confirm trigger
+
+**Files touched:** `js/main.js`
+
+**Scope notes:** Only bind slots that exist. No UI needed — this is a pure keyboard layer.
+
+---
+
+### Phase 9 — Macro Builder (Marquee Feature)
+**Concept:** A dedicated fifth tab where the user assembles a sequence of library scripts and runs them in order. The most distinctive feature of the plugin.
+
+**UI:**
+- New tab `#tab-macro` with tab button `#btn-tab-macro`
+- Left sidebar: mini library browser (search, click to add to chain)
+- Main area: vertical list of chain steps, each showing script name + optional delay input
+- Drag-to-reorder (HTML5 draggable or a lightweight lib)
+- "Cast Macro" button runs all steps in sequence
+- Steps show live status as macro runs (pending / running / success / error indicator)
+- Save macro with a name; saved macros listed below the builder
+
+**Execution logic:**
+- Run each script in sequence via `csInterface.evalScript()`, awaiting callback before proceeding to next
+- Optional delay between steps (ms input per step)
+- On any step failure: show error, offer "continue anyway" or "abort" choice
+- Macro run logged to history as a single grouped entry
+
+**Files touched:** `index.html` (new tab), `css/style.css` (macro builder styles), `js/main.js` (macro state, execution engine, drag-reorder)
+
+**Scope notes:** This is the biggest remaining feature. Suggest building the UI and static execution first, then adding save/load and drag-reorder as polish passes.
+
+---
+
+### Phase 10 — Storage Migration (Infra)
+**Concept:** Move library and slots from localStorage to a JSON file on disk, making data portable and backupable.
+
+**Implementation:**
+- Use `window.cep.fs.readFile()` / `writeFile()` to read/write a `holy-scripture-data.json` in the user's Documents folder or the extension's own data directory
+- On first load: check for file, fall back to localStorage if not present, migrate on first write
+- On every save: write to file (async, silent)
+
+**Files touched:** `js/main.js` (storage layer abstraction — wrap localStorage get/set behind a `storage.get()/set()` interface first, then swap the implementation)
+
+**Scope notes:** Do the abstraction layer first so the swap is clean. History can stay in localStorage (it's ephemeral by nature).
+
+---
+
+### Build Order Recommendation
+
+| Priority | Phase | Effort | Value |
+|---|---|---|---|
+| 1 | Phase 7 — .jsx Import | Low | High (closes an open UI promise) |
+| 2 | Phase 8 — Slot Shortcuts | Low | Medium |
+| 3 | Phase 6 — Script Parameters | Medium | High |
+| 4 | Phase 9 — Macro Builder | High | Very High (marquee feature) |
+| 5 | Phase 10 — Storage Migration | Medium | Medium (infra, needed for sharing/backup) |

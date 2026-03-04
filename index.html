@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Holy Scripture</title>
 
-    <!-- Google Fonts: Share Tech Mono -->
+    <!-- Google Fonts: Share Tech Mono + Dosis -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Dosis:wght@700&display=swap" rel="stylesheet">
 
     <!-- CodeMirror 5 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
@@ -40,8 +40,16 @@
 
     <!-- HEADER -->
     <header id="header">
+        <div class="obsidian-underlay" aria-hidden="true">
+            <div class="obsidian-underlay-line"></div>
+            <div class="obsidian-underlay-line"></div>
+            <div class="obsidian-underlay-line"></div>
+        </div>
         <div class="header-brand">☩ <span>HOLY</span> SCRIPTURE</div>
-        <div style="font-size:9px; color: var(--hp-signal-dim); letter-spacing:0.1em;">v1.0</div>
+        <div class="header-meta">
+            <span class="header-version">v1.0</span>
+            <button class="btn-reload-dev" title="Reload Panel" onclick="location.reload()">↻</button>
+        </div>
     </header>
 
     <!-- AE CONTEXT BAR -->
@@ -61,6 +69,7 @@
         <button class="tab-btn" data-tab="slots">SLOTS</button>
         <button class="tab-btn" data-tab="library">LIBRARY</button>
         <button class="tab-btn" data-tab="history">LOG</button>
+        <button class="tab-btn" data-tab="macro">MACRO</button>
     </nav>
 
     <!-- TAB CONTENT -->
@@ -78,6 +87,18 @@
             <div id="editor-actions">
                 <button class="btn-primary btn-full" id="btn-run">▶ CAST SCRIPT</button>
                 <button class="btn-secondary" id="btn-save" title="Save to Library">✚ SAVE</button>
+            </div>
+
+            <!-- Script Parameters panel -->
+            <div id="params-panel">
+                <div id="params-header">
+                    <span>PARAMS</span>
+                    <button class="btn-ghost" id="btn-add-param" style="padding:1px 7px; font-size:9px;">+ ADD</button>
+                    <button class="btn-ghost" id="btn-params-toggle" style="padding:1px 6px; font-size:9px;">▼</button>
+                </div>
+                <div id="params-body">
+                    <!-- param rows rendered by JS -->
+                </div>
             </div>
 
             <!-- Inline console -->
@@ -149,6 +170,54 @@
             </div>
 
         </div><!-- /tab-history -->
+
+        <!-- ── MACRO TAB ───────────────────────────────────── -->
+        <div class="tab-panel" id="tab-macro">
+
+            <div class="macro-toolbar">
+                <input type="text" id="macro-name-input" class="search-input" placeholder="MACRO NAME..." spellcheck="false" autocomplete="off">
+                <button class="btn-secondary" id="btn-save-macro" style="padding:7px 10px; font-size:9px; flex-shrink:0;">SAVE</button>
+                <button class="btn-ghost" id="btn-clear-macro" style="padding:7px 8px; font-size:9px; flex-shrink:0; border-left:1px solid var(--border-subtle); border-radius:0;">CLEAR</button>
+            </div>
+
+            <div id="macro-chain">
+                <!-- steps rendered by JS -->
+            </div>
+
+            <div id="macro-chain-empty" class="empty-state">
+                <span>NO STEPS</span>
+                <span class="sub">ADD SCRIPTS FROM YOUR LIBRARY BELOW</span>
+            </div>
+
+            <div class="macro-add-area">
+                <select id="macro-script-picker">
+                    <option value="">— ADD FROM LIBRARY —</option>
+                </select>
+                <button class="btn-secondary" id="btn-macro-add-step" style="padding:6px 10px; font-size:9px; flex-shrink:0;">+ STEP</button>
+            </div>
+
+            <div class="macro-controls">
+                <button class="btn-primary btn-full" id="btn-cast-macro">▶ CAST MACRO</button>
+                <div class="macro-error-row">
+                    <span class="macro-label">ON ERROR:</span>
+                    <select id="macro-on-error">
+                        <option value="abort">ABORT</option>
+                        <option value="continue">CONTINUE</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="saved-macros-section">
+                <div class="saved-macros-header">SAVED MACROS</div>
+                <div id="saved-macros-list">
+                    <!-- saved macros rendered by JS -->
+                </div>
+                <div id="saved-macros-empty" class="empty-state" style="padding:16px;">
+                    <span class="sub">NO SAVED MACROS YET</span>
+                </div>
+            </div>
+
+        </div><!-- /tab-macro -->
 
     </div><!-- /tab-content -->
 

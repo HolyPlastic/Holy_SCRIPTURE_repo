@@ -13,6 +13,7 @@
     var STORAGE_SLOTS   = 'hs_slots';
     var STORAGE_LIBRARY = 'hs_library';
     var STORAGE_HISTORY = 'hs_history';
+    var STORAGE_MACROS  = 'hs_macros';
     var MAX_HISTORY     = 100;
     var CONTEXT_INTERVAL = 2000; // ms
 
@@ -24,8 +25,14 @@
         slots: [],
         library: { categories: [], scripts: [] },
         history: [],
+        params: [],             // script parameter rows for the editor
+        macros: [],             // saved macros
+        macroChain: [],         // current working macro chain steps
         pendingSaveCode: null   // code queued for the save modal
     };
+
+    // shortcut recording state
+    var recordingSlotId = null;
 
     // ============================================================
     // CEP INTERFACE
@@ -128,19 +135,145 @@
         if (name === 'editor' && editor) {
             setTimeout(function() { editor.refresh(); }, 10);
         }
+        if (name === 'macro') {
+            rebuildMacroPicker();
+        }
     }
 
     // ============================================================
-    // RUN SCRIPT (shared by editor & slots)
+    // SCRIPT PARAMETERS
     // ============================================================
-    function runScript(code, sourceName) {
+    function makeParam() {
+        return { key: '', type: 'string', value: '' };
+    }
+
+    function buildParamPreamble() {
+        var lines = [];
+        state.params.forEach(function(p) {
+            var k = p.key.trim();
+            if (!k) return;
+            var val;
+            if (p.type === 'number')       val = parseFloat(p.value) || 0;
+            else if (p.type === 'boolean') val = (p.value === 'true') ? 'true' : 'false';
+            else                           val = JSON.stringify(p.value); // string + color
+            lines.push('var ' + k + ' = ' + val + ';');
+        });
+        return lines.join('\n');
+    }
+
+    function renderParams() {
+        var body = document.getElementById('params-body');
+        if (!body) return;
+        body.innerHTML = '';
+
+        state.params.forEach(function(p, i) {
+            var row = document.createElement('div');
+            row.className = 'param-row';
+
+            var valueHtml;
+            if (p.type === 'color') {
+                valueHtml = '<input type="color" class="param-value-color" data-param-value="' + i + '" value="' + escHtml(p.value || '#ff2c72') + '">';
+            } else if (p.type === 'boolean') {
+                valueHtml = '<select class="param-value-bool" data-param-value="' + i + '">'
+                    + '<option value="true"'  + (p.value === 'true'  ? ' selected' : '') + '>TRUE</option>'
+                    + '<option value="false"' + (p.value !== 'true'  ? ' selected' : '') + '>FALSE</option>'
+                    + '</select>';
+            } else {
+                valueHtml = '<input type="text" class="param-value" data-param-value="' + i + '" value="' + escHtml(p.value) + '" placeholder="value" spellcheck="false" autocomplete="off">';
+            }
+
+            row.innerHTML = [
+                '<input type="text" class="param-key" data-param-key="' + i + '" value="' + escHtml(p.key) + '" placeholder="varName" spellcheck="false" autocomplete="off">',
+                '<select class="param-type" data-param-type="' + i + '">',
+                    '<option value="string"'  + (p.type === 'string'  ? ' selected' : '') + '>STR</option>',
+                    '<option value="number"'  + (p.type === 'number'  ? ' selected' : '') + '>NUM</option>',
+                    '<option value="boolean"' + (p.type === 'boolean' ? ' selected' : '') + '>BOOL</option>',
+                    '<option value="color"'   + (p.type === 'color'   ? ' selected' : '') + '>CLR</option>',
+                '</select>',
+                valueHtml,
+                '<button class="param-remove" data-param-remove="' + i + '" title="Remove">✕</button>'
+            ].join('');
+
+            body.appendChild(row);
+        });
+
+        // Bind events
+        body.querySelectorAll('[data-param-key]').forEach(function(inp) {
+            inp.addEventListener('input', function() {
+                state.params[+this.dataset.paramKey].key = this.value;
+            });
+        });
+        body.querySelectorAll('[data-param-type]').forEach(function(sel) {
+            sel.addEventListener('change', function() {
+                var idx = +this.dataset.paramType;
+                state.params[idx].type = this.value;
+                // reset value to sensible default on type switch
+                if (this.value === 'boolean') state.params[idx].value = 'true';
+                else if (this.value === 'color') state.params[idx].value = '#ff2c72';
+                else state.params[idx].value = '';
+                renderParams();
+            });
+        });
+        body.querySelectorAll('[data-param-value]').forEach(function(inp) {
+            inp.addEventListener('change', function() {
+                state.params[+this.dataset.paramValue].value = this.value;
+            });
+            inp.addEventListener('input', function() {
+                state.params[+this.dataset.paramValue].value = this.value;
+            });
+        });
+        body.querySelectorAll('[data-param-remove]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                state.params.splice(+this.dataset.paramRemove, 1);
+                renderParams();
+            });
+        });
+    }
+
+    function initParams() {
+        state.params = [];
+        renderParams();
+
+        var btnAdd    = document.getElementById('btn-add-param');
+        var btnToggle = document.getElementById('btn-params-toggle');
+        var body      = document.getElementById('params-body');
+
+        if (btnAdd) {
+            btnAdd.addEventListener('click', function() {
+                state.params.push(makeParam());
+                if (body && !body.classList.contains('open')) {
+                    body.classList.add('open');
+                    if (btnToggle) btnToggle.textContent = '▲';
+                }
+                renderParams();
+            });
+        }
+
+        if (btnToggle) {
+            btnToggle.addEventListener('click', function() {
+                if (!body) return;
+                var open = body.classList.toggle('open');
+                this.textContent = open ? '▲' : '▼';
+            });
+        }
+    }
+
+    // ============================================================
+    // RUN SCRIPT (shared by editor, slots, library, macro)
+    // ============================================================
+    function runScript(code, sourceName, onComplete) {
         sourceName = sourceName || 'EDITOR';
         var trimmed = (code || '').trim();
 
         if (!trimmed) {
             logConsole('info', '> NO CODE TO RUN');
+            if (onComplete) onComplete(false, { message: 'No code' });
             return;
         }
+
+        // Prepend parameter preamble if any params are defined
+        var preamble = buildParamPreamble();
+        var codeToRun = preamble ? preamble + '\n\n' + trimmed : trimmed;
 
         logConsole('run', '> CASTING: ' + sourceName + '...');
 
@@ -150,11 +283,12 @@
             // Dev/browser mode: simulate the call
             logConsole('info', '> [DEV MODE] CEP not available — script not sent to AE');
             addToHistory(sourceName, trimmed, false, { message: 'CEP not available in dev mode' });
+            if (onComplete) onComplete(false, { message: 'CEP not available' });
             return;
         }
 
         cs.evalScript(
-            'HS_runScript(' + JSON.stringify(trimmed) + ')',
+            'HS_runScript(' + JSON.stringify(codeToRun) + ')',
             function(result) {
                 var duration = Date.now() - start;
 
@@ -162,6 +296,7 @@
                     var errMsg = 'Internal evalScript error — check AE scripting preferences.';
                     logConsole('error', '> ✗ ' + errMsg);
                     addToHistory(sourceName, trimmed, false, { message: errMsg });
+                    if (onComplete) onComplete(false, { message: errMsg });
                     return;
                 }
 
@@ -171,6 +306,7 @@
                 } catch(e) {
                     logConsole('error', '> ✗ Could not parse response: ' + result);
                     addToHistory(sourceName, trimmed, false, { message: 'Parse error: ' + result });
+                    if (onComplete) onComplete(false, { message: 'Parse error' });
                     return;
                 }
 
@@ -188,6 +324,7 @@
                     }
                     flickerBtn(document.getElementById('btn-run'));
                     addToHistory(sourceName, trimmed, true, null);
+                    if (onComplete) onComplete(true, null);
                 } else {
                     var e = data.error || {};
                     logConsole('error', '> ✗ ' + (e.name || 'Error') + ': ' + (e.message || '?'));
@@ -195,6 +332,7 @@
                         logConsole('error', '  Line: ' + e.line);
                     }
                     addToHistory(sourceName, trimmed, false, e);
+                    if (onComplete) onComplete(false, e);
                 }
             }
         );
@@ -296,6 +434,7 @@
             name: name.toUpperCase(),
             code: state.pendingSaveCode || '',
             category: catId || '',
+            params: JSON.parse(JSON.stringify(state.params)), // snapshot current params
             pinned: false,
             created: Date.now()
         };
@@ -329,8 +468,44 @@
             id: 'slot_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
             name: name || 'SLOT',
             code: '',
-            expanded: true
+            expanded: true,
+            shortcut: null // { key, ctrl, alt, shift }
         };
+    }
+
+    function formatShortcut(s) {
+        if (!s) return '⌨';
+        var parts = [];
+        if (s.ctrl)  parts.push('CTRL');
+        if (s.alt)   parts.push('ALT');
+        if (s.shift) parts.push('SHF');
+        parts.push(s.key.length === 1 ? s.key.toUpperCase() : s.key);
+        return parts.join('+');
+    }
+
+    function startShortcutRecording(slotId) {
+        recordingSlotId = slotId;
+        // Update button appearance
+        var btn = document.querySelector('[data-slot-shortcut="' + slotId + '"]');
+        if (btn) {
+            btn.textContent = 'PRESS KEY…';
+            btn.classList.add('recording');
+            btn.classList.remove('has-shortcut');
+        }
+    }
+
+    function cancelShortcutRecording() {
+        if (!recordingSlotId) return;
+        var slotId = recordingSlotId;
+        recordingSlotId = null;
+        // Restore button
+        var slot = getSlot(slotId);
+        var btn = document.querySelector('[data-slot-shortcut="' + slotId + '"]');
+        if (btn && slot) {
+            btn.textContent = formatShortcut(slot.shortcut);
+            btn.classList.remove('recording');
+            if (slot.shortcut) btn.classList.add('has-shortcut');
+        }
     }
 
     function addSlot() {
@@ -383,11 +558,15 @@
 
             var padded = (i + 1) < 10 ? '0' + (i + 1) : String(i + 1);
 
+            var scLabel = formatShortcut(slot.shortcut);
+            var scClass = 'slot-shortcut-btn' + (slot.shortcut ? ' has-shortcut' : '');
+
             item.innerHTML = [
                 '<div class="slot-header">',
                     '<span class="slot-index">' + padded + '</span>',
                     '<input class="slot-name-input" type="text" value="' + escHtml(slot.name) + '" ',
                         'data-slot-name="' + slot.id + '" placeholder="NAME" spellcheck="false" autocomplete="off">',
+                    '<button class="' + scClass + '" data-slot-shortcut="' + slot.id + '" title="Click to set shortcut">' + escHtml(scLabel) + '</button>',
                     '<button class="slot-toggle" data-slot-toggle="' + slot.id + '">' + (slot.expanded ? '▲' : '▼') + '</button>',
                     '<button class="btn-icon del-icon" data-slot-del="' + slot.id + '" title="Remove slot">✕</button>',
                 '</div>',
@@ -485,6 +664,19 @@
                 if (slot) openSaveModal(slot.code);
             });
         });
+
+        // Shortcut recording
+        list.querySelectorAll('[data-slot-shortcut]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (recordingSlotId === this.dataset.slotShortcut) {
+                    cancelShortcutRecording();
+                } else {
+                    if (recordingSlotId) cancelShortcutRecording();
+                    startShortcutRecording(this.dataset.slotShortcut);
+                }
+            });
+        });
     }
 
     function saveSlots() {
@@ -578,7 +770,19 @@
         list.querySelectorAll('[data-lib-load]').forEach(function(btn) {
             btn.addEventListener('click', function() {
                 var s = state.library.scripts.find(function(x) { return x.id === btn.dataset.libLoad; });
-                if (s) { setEditorCode(s.code); switchTab('editor'); }
+                if (s) {
+                    setEditorCode(s.code);
+                    // Restore params if script has them
+                    if (s.params && s.params.length > 0) {
+                        state.params = JSON.parse(JSON.stringify(s.params));
+                        renderParams();
+                        var body = document.getElementById('params-body');
+                        var toggle = document.getElementById('btn-params-toggle');
+                        if (body) body.classList.add('open');
+                        if (toggle) toggle.textContent = '▲';
+                    }
+                    switchTab('editor');
+                }
             });
         });
         list.querySelectorAll('[data-lib-del]').forEach(function(btn) {
@@ -812,12 +1016,59 @@
 
         // Keyboard shortcuts (global)
         document.addEventListener('keydown', function(e) {
+            // Shortcut recording mode
+            if (recordingSlotId) {
+                // Escape cancels recording
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelShortcutRecording();
+                    return;
+                }
+                // Backspace/Delete clears the shortcut
+                if (e.key === 'Backspace' || e.key === 'Delete') {
+                    e.preventDefault();
+                    var slotToClear = getSlot(recordingSlotId);
+                    if (slotToClear) { slotToClear.shortcut = null; saveSlots(); }
+                    cancelShortcutRecording();
+                    renderSlots();
+                    return;
+                }
+                // Ignore bare modifier keys
+                if (['Control', 'Alt', 'Shift', 'Meta'].indexOf(e.key) !== -1) return;
+                // Record the combo
+                e.preventDefault();
+                var slotToSet = getSlot(recordingSlotId);
+                if (slotToSet) {
+                    slotToSet.shortcut = { key: e.key, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey };
+                    saveSlots();
+                }
+                cancelShortcutRecording();
+                renderSlots();
+                return;
+            }
+
             // Ctrl/Cmd + Enter in editor tab = run
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 if (state.activeTab === 'editor') runEditorScript();
             }
             // Escape = close modal
-            if (e.key === 'Escape') closeSaveModal();
+            if (e.key === 'Escape') {
+                closeSaveModal();
+                if (recordingSlotId) cancelShortcutRecording();
+            }
+
+            // Slot keyboard shortcuts — check all slots
+            state.slots.forEach(function(slot) {
+                if (!slot.shortcut) return;
+                var s = slot.shortcut;
+                if (e.key === s.key && e.ctrlKey === s.ctrl && e.altKey === s.alt && e.shiftKey === s.shift) {
+                    e.preventDefault();
+                    runScript(slot.code, slot.name);
+                    // Flash the slot's run button if visible
+                    var runBtn = document.querySelector('[data-slot-run="' + slot.id + '"]');
+                    if (runBtn) flickerBtn(runBtn);
+                }
+            });
         });
     }
 
@@ -854,6 +1105,370 @@
     }
 
     // ============================================================
+    // MACRO BUILDER
+    // ============================================================
+    var macroDragSrcIndex = null;
+
+    function initMacro() {
+        var stored = localStorage.getItem(STORAGE_MACROS);
+        if (stored) {
+            try { state.macros = JSON.parse(stored); } catch(e) { state.macros = []; }
+        }
+
+        renderMacroChain();
+        renderSavedMacros();
+
+        var btnCast  = document.getElementById('btn-cast-macro');
+        var btnSave  = document.getElementById('btn-save-macro');
+        var btnClear = document.getElementById('btn-clear-macro');
+        var btnAdd   = document.getElementById('btn-macro-add-step');
+
+        if (btnCast)  btnCast.addEventListener('click', castMacro);
+        if (btnSave)  btnSave.addEventListener('click', saveMacro);
+        if (btnClear) btnClear.addEventListener('click', clearMacroChain);
+        if (btnAdd)   btnAdd.addEventListener('click', addMacroStepFromPicker);
+    }
+
+    function rebuildMacroPicker() {
+        var sel = document.getElementById('macro-script-picker');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— ADD FROM LIBRARY —</option>';
+        state.library.scripts.forEach(function(s) {
+            var opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            sel.appendChild(opt);
+        });
+    }
+
+    function addMacroStepFromPicker() {
+        var sel = document.getElementById('macro-script-picker');
+        if (!sel || !sel.value) return;
+        var script = state.library.scripts.find(function(s) { return s.id === sel.value; });
+        if (!script) return;
+        state.macroChain.push({
+            id: 'step_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+            scriptId: script.id,
+            name: script.name,
+            code: script.code,
+            delay: 0
+        });
+        sel.value = '';
+        renderMacroChain();
+    }
+
+    function removeMacroStep(stepId) {
+        state.macroChain = state.macroChain.filter(function(s) { return s.id !== stepId; });
+        renderMacroChain();
+    }
+
+    function clearMacroChain() {
+        state.macroChain = [];
+        renderMacroChain();
+        var nameInp = document.getElementById('macro-name-input');
+        if (nameInp) nameInp.value = '';
+    }
+
+    function setStepStatus(stepId, status) {
+        var el = document.querySelector('.macro-step[data-step-id="' + stepId + '"]');
+        if (!el) return;
+        el.classList.remove('step-running', 'step-ok', 'step-error');
+        if (status) el.classList.add('step-' + status);
+    }
+
+    function renderMacroChain() {
+        var chain   = document.getElementById('macro-chain');
+        var empty   = document.getElementById('macro-chain-empty');
+        if (!chain) return;
+
+        chain.innerHTML = '';
+
+        if (state.macroChain.length === 0) {
+            if (empty) empty.style.display = 'flex';
+            rebuildMacroPicker();
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+
+        state.macroChain.forEach(function(step, i) {
+            var item = document.createElement('div');
+            item.className = 'macro-step';
+            item.dataset.stepId = step.id;
+            item.draggable = true;
+
+            var padded = (i + 1) < 10 ? '0' + (i + 1) : String(i + 1);
+
+            item.innerHTML = [
+                '<span class="macro-step-drag-handle" title="Drag to reorder">⠿</span>',
+                '<span class="macro-step-index">' + padded + '</span>',
+                '<span class="macro-step-name">' + escHtml(step.name) + '</span>',
+                '<div class="macro-step-delay-wrap">',
+                    '<span>MS</span>',
+                    '<input type="number" class="macro-step-delay" min="0" max="60000" step="100"',
+                        ' value="' + (step.delay || 0) + '" data-step-delay="' + step.id + '">',
+                '</div>',
+                '<button class="btn-icon del-icon" data-step-remove="' + step.id + '" title="Remove step">✕</button>'
+            ].join('');
+
+            // Drag-reorder events
+            item.addEventListener('dragstart', function(e) {
+                macroDragSrcIndex = i;
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            item.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                chain.querySelectorAll('.macro-step').forEach(function(s) { s.classList.remove('drag-over'); });
+                item.classList.add('drag-over');
+            });
+            item.addEventListener('dragleave', function() {
+                item.classList.remove('drag-over');
+            });
+            item.addEventListener('drop', function(e) {
+                e.preventDefault();
+                item.classList.remove('drag-over');
+                if (macroDragSrcIndex === null || macroDragSrcIndex === i) return;
+                var moved = state.macroChain.splice(macroDragSrcIndex, 1)[0];
+                state.macroChain.splice(i, 0, moved);
+                macroDragSrcIndex = null;
+                renderMacroChain();
+            });
+            item.addEventListener('dragend', function() {
+                chain.querySelectorAll('.macro-step').forEach(function(s) { s.classList.remove('drag-over'); });
+                macroDragSrcIndex = null;
+            });
+
+            chain.appendChild(item);
+        });
+
+        // Bind step events
+        chain.querySelectorAll('[data-step-delay]').forEach(function(inp) {
+            inp.addEventListener('change', function() {
+                var step = state.macroChain.find(function(s) { return s.id === inp.dataset.stepDelay; });
+                if (step) step.delay = Math.max(0, parseInt(inp.value) || 0);
+            });
+        });
+        chain.querySelectorAll('[data-step-remove]').forEach(function(btn) {
+            btn.addEventListener('click', function() { removeMacroStep(this.dataset.stepRemove); });
+        });
+
+        rebuildMacroPicker();
+    }
+
+    function castMacro() {
+        if (state.macroChain.length === 0) {
+            logConsole('info', '> MACRO: NO STEPS TO CAST');
+            return;
+        }
+
+        var steps   = state.macroChain.slice();
+        var onError = (document.getElementById('macro-on-error') || {}).value || 'abort';
+        var macroName = ((document.getElementById('macro-name-input') || {}).value || 'MACRO').trim().toUpperCase() || 'MACRO';
+        var i = 0;
+
+        logConsole('run', '> CASTING MACRO: ' + macroName + ' (' + steps.length + ' STEPS)');
+
+        // Reset all step statuses
+        steps.forEach(function(s) { setStepStatus(s.id, 'running'); });
+        steps.forEach(function(s) { setStepStatus(s.id, null); });
+
+        function runNext() {
+            if (i >= steps.length) {
+                logConsole('success', '> ✓ MACRO COMPLETE — ' + steps.length + ' steps');
+                addToHistory(macroName, '[MACRO: ' + steps.map(function(s) { return s.name; }).join(' → ') + ']', true, null);
+                return;
+            }
+
+            var step = steps[i];
+            setStepStatus(step.id, 'running');
+
+            var delay = step.delay || 0;
+            setTimeout(function() {
+                runScript(step.code, 'MACRO/' + step.name, function(ok, err) {
+                    setStepStatus(step.id, ok ? 'ok' : 'error');
+
+                    if (!ok && onError === 'abort') {
+                        logConsole('error', '> ✗ MACRO ABORTED at step ' + (i + 1) + ': ' + step.name);
+                        addToHistory(macroName, '[MACRO ABORTED at step ' + (i + 1) + ']', false, err);
+                        return;
+                    }
+
+                    i++;
+                    runNext();
+                });
+            }, delay);
+        }
+
+        runNext();
+    }
+
+    function saveMacro() {
+        if (state.macroChain.length === 0) {
+            logConsole('info', '> MACRO: NOTHING TO SAVE');
+            return;
+        }
+        var nameInp = document.getElementById('macro-name-input');
+        var name = (nameInp ? nameInp.value.trim() : '').toUpperCase() || 'MACRO';
+
+        var macro = {
+            id: 'macro_' + Date.now(),
+            name: name,
+            steps: JSON.parse(JSON.stringify(state.macroChain)),
+            onError: (document.getElementById('macro-on-error') || {}).value || 'abort',
+            created: Date.now()
+        };
+
+        state.macros.push(macro);
+        localStorage.setItem(STORAGE_MACROS, JSON.stringify(state.macros));
+        renderSavedMacros();
+        logConsole('success', '> ✓ MACRO SAVED: ' + name);
+    }
+
+    function deleteMacro(id) {
+        state.macros = state.macros.filter(function(m) { return m.id !== id; });
+        localStorage.setItem(STORAGE_MACROS, JSON.stringify(state.macros));
+        renderSavedMacros();
+    }
+
+    function loadMacro(id) {
+        var macro = state.macros.find(function(m) { return m.id === id; });
+        if (!macro) return;
+        state.macroChain = JSON.parse(JSON.stringify(macro.steps));
+        var nameInp = document.getElementById('macro-name-input');
+        if (nameInp) nameInp.value = macro.name;
+        var errSel = document.getElementById('macro-on-error');
+        if (errSel) errSel.value = macro.onError || 'abort';
+        renderMacroChain();
+        logConsole('info', '> MACRO LOADED: ' + macro.name);
+    }
+
+    function renderSavedMacros() {
+        var list  = document.getElementById('saved-macros-list');
+        var empty = document.getElementById('saved-macros-empty');
+        if (!list) return;
+
+        list.innerHTML = '';
+
+        if (state.macros.length === 0) {
+            if (empty) empty.style.display = 'flex';
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+
+        state.macros.slice().reverse().forEach(function(macro) {
+            var item = document.createElement('div');
+            item.className = 'saved-macro-item';
+            item.innerHTML = [
+                '<span class="saved-macro-name">' + escHtml(macro.name) + '</span>',
+                '<span class="saved-macro-meta">' + macro.steps.length + ' STEPS</span>',
+                '<div class="saved-macro-actions">',
+                    '<button class="btn-icon run-icon" data-macro-cast="' + macro.id + '" title="Cast">▶</button>',
+                    '<button class="btn-icon" data-macro-load="' + macro.id + '" title="Load into builder">↩</button>',
+                    '<button class="btn-icon del-icon" data-macro-del="' + macro.id + '" title="Delete">✕</button>',
+                '</div>'
+            ].join('');
+            list.appendChild(item);
+        });
+
+        list.querySelectorAll('[data-macro-cast]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var macro = state.macros.find(function(m) { return m.id === btn.dataset.macroCast; });
+                if (!macro) return;
+                // Load and immediately cast
+                state.macroChain = JSON.parse(JSON.stringify(macro.steps));
+                renderMacroChain();
+                castMacro();
+            });
+        });
+        list.querySelectorAll('[data-macro-load]').forEach(function(btn) {
+            btn.addEventListener('click', function() { loadMacro(btn.dataset.macroLoad); });
+        });
+        list.querySelectorAll('[data-macro-del]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                if (confirm('Delete macro "' + btn.closest('.saved-macro-item').querySelector('.saved-macro-name').textContent + '"?')) {
+                    deleteMacro(btn.dataset.macroDel);
+                }
+            });
+        });
+    }
+
+    // ============================================================
+    // DRAG-DROP .JSX IMPORT
+    // ============================================================
+    function initDragDrop() {
+        var body = document.body;
+
+        function hasFile(e) {
+            if (!e.dataTransfer) return false;
+            var items = e.dataTransfer.items;
+            if (items) {
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].kind === 'file') return true;
+                }
+            }
+            return e.dataTransfer.types && (
+                e.dataTransfer.types.indexOf('Files') !== -1 ||
+                e.dataTransfer.types.indexOf('application/x-moz-file') !== -1
+            );
+        }
+
+        body.addEventListener('dragenter', function(e) {
+            if (hasFile(e)) {
+                e.preventDefault();
+                body.classList.add('drag-active');
+            }
+        });
+
+        body.addEventListener('dragover', function(e) {
+            if (hasFile(e)) { e.preventDefault(); }
+        });
+
+        body.addEventListener('dragleave', function(e) {
+            // Only deactivate when leaving the window entirely
+            if (!e.relatedTarget || e.relatedTarget === document.documentElement || !document.body.contains(e.relatedTarget)) {
+                body.classList.remove('drag-active');
+            }
+        });
+
+        body.addEventListener('drop', function(e) {
+            body.classList.remove('drag-active');
+            e.preventDefault();
+
+            var files = e.dataTransfer.files;
+            if (!files || files.length === 0) return;
+            var file = files[0];
+            if (!/\.(jsx?|js)$/i.test(file.name)) {
+                logConsole('info', '> DROP: not a .jsx / .js file');
+                return;
+            }
+
+            var reader = new FileReader();
+            reader.onload = function(ev) {
+                var code = ev.target.result;
+                var baseName = file.name.replace(/\.jsx?$/i, '').toUpperCase();
+
+                if (state.activeTab === 'library') {
+                    // Save to library — open modal pre-filled with filename
+                    openSaveModal(code);
+                    setTimeout(function() {
+                        var inp = document.getElementById('modal-name');
+                        if (inp) inp.value = baseName;
+                    }, 60);
+                } else {
+                    // Load into editor
+                    setEditorCode(code);
+                    switchTab('editor');
+                    logConsole('info', '> LOADED: ' + baseName);
+                }
+            };
+            reader.onerror = function() {
+                logConsole('error', '> ✗ Could not read dropped file');
+            };
+            reader.readAsText(file);
+        });
+    }
+
+    // ============================================================
     // UTILITIES
     // ============================================================
     function escHtml(str) {
@@ -876,9 +1491,12 @@
         initEditor();
         initTabs();
         initEventListeners();
+        initParams();
         initSlots();
         initLibrary();
         initHistory();
+        initMacro();
+        initDragDrop();
         initContextBar();
 
         // Force CM layout after panel is shown
