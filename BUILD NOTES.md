@@ -301,3 +301,43 @@ HOLY SCRIPTURE/
 | 3 | Phase 6 — Script Parameters | Medium | High |
 | 4 | Phase 9 — Macro Builder | High | Very High (marquee feature) |
 | 5 | Phase 10 — Storage Migration | Medium | Medium (infra, needed for sharing/backup) |
+
+
+---
+
+
+
+**Implemented:**
+
+- **.txt drag‑drop support**  
+  The drag‑drop file import now accepts `.txt` files alongside `.jsx`/`.js`. Dropping a `.txt` file loads its contents into the editor (or saves to library if dropped on the Library tab). The overlay text has been updated to `DROP .JSX / .TXT HERE`.
+
+- **Console panel collapsible**  
+  Added a toggle button (▼/▶) to the OUTPUT header. Clicking collapses the output pane to just the header bar, reclaiming vertical space. Default height reduced from 120px → 80px. Collapsing also refreshes CodeMirror so it fills the reclaimed space.
+
+- **UI density reduction**  
+  Padding and font sizes were trimmed throughout to make the interface less cramped:
+  - Header: 6px → 4px padding, brand font 13px → 11px
+  - Tab bar: 6px → 4px vertical padding
+  - CAST SCRIPT / SAVE bar: 8px → 6px padding
+  - Slots toolbar, History toolbar: 6px → 4px padding
+
+- **Polling fix (AE cursor flicker)**  
+  The 2‑second polling for AE context (`HS_getContext`) now pauses when the CEP panel loses focus (`window blur`), and resumes on focus. This eliminates unnecessary `evalScript` calls while working in After Effects, stopping the cursor flicker and UI redraws that were previously caused by the plugin.
+
+- **Tooltips**  
+  Added `title` attributes to key UI elements for better discoverability:  
+  CAST SCRIPT, SAVE, + ADD param, collapse param, collapse output, CLEAR, all 5 tab buttons, + ADD SLOT, IMPORT .JSX.
+
+**Files updated:** `main.js`, `index.html`, `style.css`, `dragdrop.js` (drag overlay text), and others as needed.
+
+**Next steps:**  
+The plugin now feels more compact and responsive. Future work can focus on the remaining planned phases (Script Parameters, Macro Builder, etc.) as outlined in the **NEXT PHASES** section.
+
+- **Phase 7 — Drag-Drop .jsx Import (BUILT)*  
+  - Filters: `.jsx`, `.js`, **and `.txt`** files accepted.  
+  - Visual overlay text now reads `DROP .JSX / .TXT HERE`.
+
+- ~~Polling causing AE cursor flicker~~ → **Fixed in session 4** – polling now pauses when panel is out of focus.
+
+---

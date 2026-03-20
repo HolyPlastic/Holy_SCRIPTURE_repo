@@ -890,6 +890,21 @@
     // ============================================================
     // AE CONTEXT BAR
     // ============================================================
+    var contextTimer = null;
+
+    function startContextPolling() {
+        if (contextTimer) return;
+        updateContext();
+        contextTimer = setInterval(updateContext, CONTEXT_INTERVAL);
+    }
+
+    function stopContextPolling() {
+        if (contextTimer) {
+            clearInterval(contextTimer);
+            contextTimer = null;
+        }
+    }
+
     function initContextBar() {
         if (!isInCEP) {
             // Show demo data in dev mode
@@ -902,8 +917,13 @@
             });
             return;
         }
-        updateContext();
-        setInterval(updateContext, CONTEXT_INTERVAL);
+
+        startContextPolling();
+
+        // Pause polling while panel is out of focus — prevents AE cursor flicker
+        // from evalScript calls while the user is working in AE
+        window.addEventListener('blur',  stopContextPolling);
+        window.addEventListener('focus', startContextPolling);
     }
 
     function updateContext() {
@@ -968,6 +988,20 @@
         var btnClearConsole = document.getElementById('btn-clear-console');
         if (btnClearConsole) {
             btnClearConsole.addEventListener('click', clearConsole);
+        }
+
+        // Toggle console collapse
+        var btnConsoleToggle = document.getElementById('btn-console-toggle');
+        if (btnConsoleToggle) {
+            btnConsoleToggle.addEventListener('click', function() {
+                var panel = document.getElementById('console-panel');
+                if (!panel) return;
+                var collapsed = panel.classList.toggle('collapsed');
+                this.textContent = collapsed ? '▶' : '▼';
+                if (!collapsed && editor) {
+                    setTimeout(function() { editor.refresh(); }, 50);
+                }
+            });
         }
 
         // Add slot
@@ -1437,15 +1471,15 @@
             var files = e.dataTransfer.files;
             if (!files || files.length === 0) return;
             var file = files[0];
-            if (!/\.(jsx?|js)$/i.test(file.name)) {
-                logConsole('info', '> DROP: not a .jsx / .js file');
+            if (!/\.(jsx?|js|txt)$/i.test(file.name)) {
+                logConsole('info', '> DROP: not a .jsx / .js / .txt file');
                 return;
             }
 
             var reader = new FileReader();
             reader.onload = function(ev) {
                 var code = ev.target.result;
-                var baseName = file.name.replace(/\.jsx?$/i, '').toUpperCase();
+                var baseName = file.name.replace(/\.(jsx?|js|txt)$/i, '').toUpperCase();
 
                 if (state.activeTab === 'library') {
                     // Save to library — open modal pre-filled with filename

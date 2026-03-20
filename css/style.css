@@ -137,7 +137,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
+    padding: 4px 8px;
     background: var(--bg-panel);
     border-bottom: 1px solid var(--accent-border);
     position: relative;
@@ -145,7 +145,7 @@ html, body {
 
 .header-brand {
     font-family: var(--font-label);
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.18em;
     color: var(--text-primary);
@@ -334,7 +334,7 @@ html, body {
 
 .tab-btn {
     flex: 1;
-    padding: 6px 4px;
+    padding: 4px 4px;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -436,8 +436,8 @@ html, body {
     flex: 1;
     justify-content: center;
     border-radius: 0;
-    padding: 8px;
-    font-size: 11px;
+    padding: 6px;
+    font-size: 10px;
     letter-spacing: 0.2em;
 }
 
@@ -445,16 +445,25 @@ html, body {
     flex: 0 0 auto;
     border-left: 1px solid var(--border-subtle);
     border-radius: 0;
-    padding: 8px 14px;
+    padding: 6px 14px;
 }
 
 /* ── CONSOLE PANEL ──────────────────────────────────────────── */
 #console-panel {
     flex-shrink: 0;
-    height: 120px;
+    height: 80px;
     display: flex;
     flex-direction: column;
     border-top: 1px solid var(--border-subtle);
+    transition: height 0.15s ease-in-out;
+}
+
+#console-panel.collapsed {
+    height: auto;
+}
+
+#console-panel.collapsed #console-output {
+    display: none;
 }
 
 #console-header {
@@ -750,7 +759,7 @@ select:focus {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-surface);
 }
@@ -1005,7 +1014,7 @@ select:focus {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-surface);
 }
@@ -1381,7 +1390,7 @@ button, input, select, textarea, .panel, .card, .context-menu {
 
 /* ── DRAG-DROP OVERLAY ────────────────────────────────────────── */
 body.drag-active::after {
-    content: 'DROP .JSX HERE';
+    content: 'DROP .JSX / .TXT HERE';
     position: fixed;
     inset: 0;
     background: rgba(var(--ACCENT-RGB), 0.1);
