@@ -34,6 +34,10 @@
     // shortcut recording state
     var recordingSlotId = null;
 
+    // slot drag-reorder state
+    var slotDragSrcId  = null;
+    var slotDropInfo = null;     // active drop target descriptor
+
     // ============================================================
     // CEP INTERFACE
     // ============================================================
@@ -122,6 +126,23 @@
                 switchTab(this.dataset.tab);
             });
         });
+
+        // Mouse-wheel over the tab bar scrolls between tabs
+        var nav = document.getElementById('tab-nav');
+        if (nav) {
+            nav.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                var btns = [].slice.call(document.querySelectorAll('.tab-btn'));
+                var currentIdx = -1;
+                btns.forEach(function(b, i) {
+                    if (b.dataset.tab === state.activeTab) currentIdx = i;
+                });
+                if (currentIdx === -1) return;
+                var dir = e.deltaY > 0 ? 1 : -1;
+                var nextIdx = (currentIdx + dir + btns.length) % btns.length;
+                switchTab(btns[nextIdx].dataset.tab);
+            }, { passive: false });
+        }
     }
 
     function switchTab(name) {
@@ -469,7 +490,8 @@
             name: name || 'SLOT',
             code: '',
             expanded: true,
-            shortcut: null // { key, ctrl, alt, shift }
+            shortcut: null, // { key, ctrl, alt, shift }
+            size: 'full'    // 'full' = own row | 'half' = shares row with adjacent half slot
         };
     }
 
@@ -553,8 +575,10 @@
 
         state.slots.forEach(function(slot, i) {
             var item = document.createElement('div');
-            item.className = 'slot-item';
+            var isHalf = slot.size === 'half';
+            item.className = 'slot-item' + (isHalf ? ' slot-half' : '');
             item.dataset.slotId = slot.id;
+            item.draggable = true;
 
             var padded = (i + 1) < 10 ? '0' + (i + 1) : String(i + 1);
 
@@ -563,7 +587,7 @@
 
             item.innerHTML = [
                 '<div class="slot-header">',
-                    '<span class="slot-index">' + padded + '</span>',
+                    '<span class="slot-drag-handle" title="Drag to reorder">⠿</span>',
                     '<input class="slot-name-input" type="text" value="' + escHtml(slot.name) + '" ',
                         'data-slot-name="' + slot.id + '" placeholder="NAME" spellcheck="false" autocomplete="off">',
                     '<button class="' + scClass + '" data-slot-shortcut="' + slot.id + '" title="Click to set shortcut">' + escHtml(scLabel) + '</button>',
@@ -676,6 +700,223 @@
                     startShortcutRecording(this.dataset.slotShortcut);
                 }
             });
+        });
+
+        // ── Drag to reorder — gesture-based drop system ──────────────
+        var BORDER_THRESH = 10;
+
+        function getSlotEls() {
+            return Array.from(list.querySelectorAll('.slot-item'));
+        }
+
+        function clearIndicators() {
+            var prev = list.querySelector('.slot-drop-preview');
+            if (prev) prev.remove();
+            var bar = list.querySelector('.slot-border-bar');
+            if (bar) bar.remove();
+            list.querySelectorAll('.slot-half-temp').forEach(function(el) {
+                el.classList.remove('slot-half', 'slot-half-temp');
+            });
+            slotDropInfo = null;
+        }
+
+        function showHalfPreview(side, targetEl) {
+            if (!targetEl.classList.contains('slot-half')) {
+                targetEl.classList.add('slot-half', 'slot-half-temp');
+            }
+            var preview = document.createElement('div');
+            preview.className = 'slot-drop-preview slot-preview-half';
+            if (side === 'left') {
+                list.insertBefore(preview, targetEl);
+            } else {
+                list.insertBefore(preview, targetEl.nextSibling);
+            }
+            slotDropInfo = { type: 'preview-half', side: side, targetId: targetEl.dataset.slotId };
+        }
+
+        function showFullPreview(targetEl) {
+            var preview = document.createElement('div');
+            preview.className = 'slot-drop-preview';
+            list.insertBefore(preview, targetEl);
+            slotDropInfo = { type: 'preview-full', targetId: targetEl.dataset.slotId };
+        }
+
+        function showRowBorderBelow(item, items) {
+            var idx = items.indexOf(item);
+            var lastInRow = item;
+            if (item.classList.contains('slot-half') &&
+                idx + 1 < items.length &&
+                items[idx + 1].classList.contains('slot-half') &&
+                items[idx + 1].dataset.slotId !== slotDragSrcId) {
+                lastInRow = items[idx + 1];
+            }
+            var bar = document.createElement('div');
+            bar.className = 'slot-border-bar slot-border-bar-h';
+            list.appendChild(bar);
+            var listRect = list.getBoundingClientRect();
+            var elRect   = lastInRow.getBoundingClientRect();
+            bar.style.top   = (elRect.bottom - listRect.top + list.scrollTop - 1.5) + 'px';
+            bar.style.left  = '0';
+            bar.style.right = '0';
+            slotDropInfo = { type: 'border-row', afterId: lastInRow.dataset.slotId };
+        }
+
+        function showColBorder(leftEl, rightEl) {
+            var bar = document.createElement('div');
+            bar.className = 'slot-border-bar slot-border-bar-v';
+            list.appendChild(bar);
+            var listRect = list.getBoundingClientRect();
+            var x      = leftEl.getBoundingClientRect().right - listRect.left;
+            var topY   = leftEl.getBoundingClientRect().top   - listRect.top + list.scrollTop;
+            var height = leftEl.getBoundingClientRect().height;
+            bar.style.left   = (x - 1.5) + 'px';
+            bar.style.top    = topY + 'px';
+            bar.style.height = height + 'px';
+            slotDropInfo = { type: 'border-col', leftId: leftEl.dataset.slotId, rightId: rightEl.dataset.slotId };
+        }
+
+        list.addEventListener('dragstart', function(e) {
+            var item = e.target.closest && e.target.closest('.slot-item');
+            if (!item) return;
+            var tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') {
+                e.preventDefault();
+                return;
+            }
+            slotDragSrcId = item.dataset.slotId;
+            e.dataTransfer.effectAllowed = 'move';
+            // Suppress ghost image so cursor stays invisible
+            var ghost = new Image();
+            ghost.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            e.dataTransfer.setDragImage(ghost, 0, 0);
+            item.classList.add('dragging');
+        });
+
+        list.addEventListener('dragover', function(e) {
+            if (!slotDragSrcId) return;
+            e.preventDefault();                  // must be unconditional — enables drop on preview too
+            e.dataTransfer.dropEffect = 'move';
+            var item = e.target.closest && e.target.closest('.slot-item:not(.slot-drop-preview)');
+            if (!item || item.dataset.slotId === slotDragSrcId) return;
+
+            clearIndicators();
+
+            var rect  = item.getBoundingClientRect();
+            var x = e.clientX, y = e.clientY;
+            var items = getSlotEls();
+            var idx   = items.indexOf(item);
+            var isHalf = item.classList.contains('slot-half');
+
+            // ── Top border (not at very top of list) ──────────────────────
+            if (idx > 0 && y - rect.top <= BORDER_THRESH) {
+                showRowBorderBelow(items[idx - 1], items);
+                return;
+            }
+
+            // ── Bottom border (not at very bottom of list) ─────────────────
+            if (rect.bottom - y <= BORDER_THRESH) {
+                var lastInRow = item;
+                if (isHalf && idx + 1 < items.length &&
+                    items[idx + 1].classList.contains('slot-half') &&
+                    items[idx + 1].dataset.slotId !== slotDragSrcId) {
+                    lastInRow = items[idx + 1];
+                }
+                if (items.indexOf(lastInRow) < items.length - 1) {
+                    showRowBorderBelow(item, items);
+                }
+                return;
+            }
+
+            // ── Vertical border — right edge of LEFT half slot ─────────────
+            if (isHalf && idx + 1 < items.length &&
+                items[idx + 1].classList.contains('slot-half') &&
+                items[idx + 1].dataset.slotId !== slotDragSrcId &&
+                rect.right - x <= BORDER_THRESH) {
+                showColBorder(item, items[idx + 1]);
+                return;
+            }
+
+            // ── Vertical border — left edge of RIGHT half slot ─────────────
+            if (isHalf && idx > 0 &&
+                items[idx - 1].classList.contains('slot-half') &&
+                items[idx - 1].dataset.slotId !== slotDragSrcId &&
+                x - rect.left <= BORDER_THRESH) {
+                showColBorder(items[idx - 1], item);
+                return;
+            }
+
+            // ── Preview box (thirds) ───────────────────────────────────────
+            var third  = rect.width / 3;
+            var localX = x - rect.left;
+            if (localX < third) {
+                showHalfPreview('left', item);
+            } else if (localX > 2 * third) {
+                showHalfPreview('right', item);
+            } else {
+                showFullPreview(item);
+            }
+        });
+
+        list.addEventListener('dragleave', function(e) {
+            if (!list.contains(e.relatedTarget)) {
+                clearIndicators();
+            }
+        });
+
+        list.addEventListener('drop', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!slotDropInfo || !slotDragSrcId) { clearIndicators(); return; }
+
+            var srcIdx = -1;
+            state.slots.forEach(function(s, i) { if (s.id === slotDragSrcId) srcIdx = i; });
+            if (srcIdx === -1) { clearIndicators(); return; }
+
+            var moved = state.slots.splice(srcIdx, 1)[0];
+            var info  = slotDropInfo;
+            clearIndicators();
+
+            if (info.type === 'preview-half') {
+                moved.size = 'half';
+                var tgtIdx = -1, tgtSlot = null;
+                state.slots.forEach(function(s, i) {
+                    if (s.id === info.targetId) { tgtSlot = s; tgtIdx = i; }
+                });
+                if (tgtSlot && tgtSlot.size !== 'half') tgtSlot.size = 'half';
+                state.slots.splice(info.side === 'left' ? tgtIdx : tgtIdx + 1, 0, moved);
+
+            } else if (info.type === 'preview-full') {
+                moved.size = 'full';
+                var tgtIdx = -1;
+                state.slots.forEach(function(s, i) { if (s.id === info.targetId) tgtIdx = i; });
+                if (tgtIdx !== -1) state.slots.splice(tgtIdx, 0, moved);
+
+            } else if (info.type === 'border-row') {
+                moved.size = 'full';
+                var afterIdx = -1;
+                state.slots.forEach(function(s, i) { if (s.id === info.afterId) afterIdx = i; });
+                state.slots.splice(afterIdx !== -1 ? afterIdx + 1 : state.slots.length, 0, moved);
+
+            } else if (info.type === 'border-col') {
+                moved.size = 'half';
+                var leftIdx = -1;
+                state.slots.forEach(function(s, i) { if (s.id === info.leftId) leftIdx = i; });
+                var rightSlot = getSlot(info.rightId);
+                if (rightSlot) rightSlot.size = 'full';
+                if (leftIdx !== -1) state.slots.splice(leftIdx + 1, 0, moved);
+            }
+
+            saveSlots();
+            renderSlots();
+        });
+
+        list.addEventListener('dragend', function() {
+            clearIndicators();
+            list.querySelectorAll('.slot-item.dragging').forEach(function(el) {
+                el.classList.remove('dragging');
+            });
+            slotDragSrcId = null;
+            slotDropInfo  = null;
         });
     }
 

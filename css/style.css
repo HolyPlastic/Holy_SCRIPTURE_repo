@@ -774,12 +774,84 @@ select:focus {
 
 #slots-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    border-left: 1px solid var(--border-subtle);
+    position: relative; /* anchor for absolutely-positioned border bars */
 }
 
 .slot-item {
+    /* Default: own row, full width */
+    flex: 0 0 100%;
+    box-sizing: border-box;
+    min-width: 0;
+    position: relative;
+    border-right: 1px solid var(--border-subtle);
     border-bottom: 1px solid var(--border-subtle);
+    transition: opacity var(--transition);
+}
+
+/* Half-width variant — pairs with an adjacent half slot */
+.slot-item.slot-half {
+    flex: 1 0 50%;
+    min-width: 160px;
+}
+
+/* ── Drag-insert indicators ──────────────────────────────────── */
+
+/* Ghost placeholder shown during dragover */
+.slot-drop-preview {
+    flex: 0 0 100%;
+    box-sizing: border-box;
+    min-height: 32px;
+    border: 2px solid var(--accent);
+    box-shadow: inset 0 0 0 1px rgba(255, 44, 114, 0.2), 0 0 10px 2px rgba(255, 44, 114, 0.25);
+    background: rgba(255, 44, 114, 0.06);
+    pointer-events: none;
+}
+
+.slot-drop-preview.slot-preview-half {
+    flex: 1 0 50%;
+    min-width: 160px;
+}
+
+/* Glowing border bar — horizontal (between rows) or vertical (between half slots) */
+.slot-border-bar {
+    position: absolute;
+    pointer-events: none;
+    z-index: 20;
+    background: var(--accent);
+    box-shadow: 0 0 8px 3px rgba(255, 44, 114, 0.6);
+}
+
+.slot-border-bar-h {
+    height: 3px;
+}
+
+.slot-border-bar-v {
+    width: 3px;
+}
+
+.slot-item.dragging {
+    opacity: 0.4;
+}
+
+.slot-drag-handle {
+    color: var(--text-faint);
+    font-size: 11px;
+    cursor: grab;
+    flex-shrink: 0;
+    padding: 0 3px 0 1px;
+    user-select: none;
+    line-height: 1;
+}
+
+.slot-drag-handle:active {
+    cursor: grabbing;
 }
 
 .slot-header {
@@ -789,16 +861,6 @@ select:focus {
     padding: 5px 6px;
     background: var(--bg-panel);
     cursor: default;
-}
-
-/* Slot index: keep mono — it's a small numeric readout */
-.slot-index {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--accent);
-    letter-spacing: 0.05em;
-    min-width: 22px;
-    flex-shrink: 0;
 }
 
 .slot-name-input {
@@ -948,6 +1010,7 @@ select:focus {
 
 #library-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 0;
 }
@@ -1021,6 +1084,7 @@ select:focus {
 
 #history-list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 
@@ -1407,6 +1471,12 @@ body.drag-active::after {
     pointer-events: none;
 }
 
+/* Compact del-icon in slot headers — smaller hit area, same glyph size */
+.slot-header .del-icon {
+    padding: 2px 4px;
+    min-width: auto;
+}
+
 /* ── SLOT SHORTCUT BUTTON ─────────────────────────────────────── */
 .slot-shortcut-btn {
     background: transparent;
@@ -1416,7 +1486,7 @@ body.drag-active::after {
     font-family: var(--font-mono);
     font-size: 8px;
     letter-spacing: 0.04em;
-    padding: 1px 6px;
+    padding: 1px 3px;
     cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
