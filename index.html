@@ -15,6 +15,39 @@
 
     <!-- Holy Scripture styles -->
     <link rel="stylesheet" href="css/style.css">
+
+    <!-- Accent color bootstrap — apply saved color before first paint -->
+    <script>
+    (function STYLE_boot() {
+        try {
+            var hex = localStorage.getItem('hs_themeColor') || '#ff2c72';
+            var clean = hex.replace('#', '');
+            var bigint = parseInt(clean, 16);
+            var r = (bigint >> 16) & 255;
+            var g = (bigint >> 8) & 255;
+            var b = bigint & 255;
+            var r1 = r / 255, g1 = g / 255, b1 = b / 255;
+            var max = Math.max(r1, g1, b1), min = Math.min(r1, g1, b1);
+            var h = 0, s = 0, l = (max + min) / 2;
+            if (max !== min) {
+                var d = max - min;
+                s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                if (max === r1)      h = (g1 - b1) / d + (g1 < b1 ? 6 : 0);
+                else if (max === g1) h = (b1 - r1) / d + 2;
+                else                 h = (r1 - g1) / d + 4;
+                h /= 6;
+            }
+            var root = document.documentElement;
+            root.style.setProperty('--accent', hex);
+            root.style.setProperty('--ACCENT-H', Math.round(h * 360));
+            root.style.setProperty('--ACCENT-S', Math.round(s * 100) + '%');
+            root.style.setProperty('--ACCENT-L', Math.round(l * 100) + '%');
+            root.style.setProperty('--ACCENT-RGB', r + ', ' + g + ', ' + b);
+        } catch (err) {
+            console.warn('[HolyScripture] STYLE_boot failed', err);
+        }
+    })();
+    </script>
 </head>
 <body>
 
@@ -38,7 +71,7 @@
 <!-- ── APP ──────────────────────────────────────────────────── -->
 <div id="app">
 
-    <!-- HEADER -->
+    <!-- HEADER (context bar lives inline here now) -->
     <header id="header">
         <div class="obsidian-underlay" aria-hidden="true">
             <div class="obsidian-underlay-line"></div>
@@ -46,22 +79,26 @@
             <div class="obsidian-underlay-line"></div>
         </div>
         <div class="header-brand">☩ <span>HOLY</span> SCRIPTURE</div>
+        <div id="context-bar">
+            <div class="ctx-cell" id="ctx-comp" style="flex:1; min-width:0;">
+                <span class="ctx-dot" id="ctx-dot"></span>
+                <span id="ctx-comp-name">NO COMP</span>
+            </div>
+            <div class="ctx-cell" id="ctx-fps-cell">–</div>
+            <div class="ctx-cell" id="ctx-layers-cell">0 LYR</div>
+            <div class="ctx-cell" id="ctx-timecode-cell">00:00:00:00</div>
+        </div>
         <div class="header-meta">
             <span class="header-version">v1.0</span>
+            <button class="btn-settings-cog" id="btn-settings" title="Open settings" type="button">
+                <svg viewBox="0 0 37.68 41.64" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-miterlimit="10">
+                    <path d="M21.34,39.62l12.54-7.24c1.47-.85,2.38-2.19,2.49-3.93v-15.27c-.12-1.74-1.02-3.08-2.49-3.93L21.21,1.94c-1.65-.95-3.39-.79-5,.14L3.64,9.35c-1.42.82-2.21,2.19-2.34,3.83v15.28c.12,1.69.97,3.04,2.42,3.88l12.67,7.31c1.59.92,3.31.93,4.95-.02Z"/>
+                    <path d="M27.16,20.82c0,4.6-3.73,8.32-8.32,8.32s-8.32-3.73-8.32-8.32,3.73-8.32,8.32-8.32,8.32,3.73,8.32,8.32Z"/>
+                </svg>
+            </button>
             <button class="btn-reload-dev" title="Reload Panel" onclick="location.reload()">↻</button>
         </div>
     </header>
-
-    <!-- AE CONTEXT BAR -->
-    <div id="context-bar">
-        <div class="ctx-cell" id="ctx-comp" style="flex:1; min-width:0;">
-            <span class="ctx-dot" id="ctx-dot"></span>
-            <span id="ctx-comp-name">NO COMP</span>
-        </div>
-        <div class="ctx-cell" id="ctx-fps-cell">–</div>
-        <div class="ctx-cell" id="ctx-layers-cell">0 LYR</div>
-        <div class="ctx-cell" id="ctx-timecode-cell">00:00:00:00</div>
-    </div>
 
     <!-- TAB NAV -->
     <nav id="tab-nav">
@@ -69,7 +106,7 @@
         <button class="tab-btn" data-tab="slots" title="Quick-access script slots with keyboard shortcuts">SLOTS</button>
         <button class="tab-btn" data-tab="library" title="Saved scripts — searchable">LIBRARY</button>
         <button class="tab-btn" data-tab="history" title="Run log — all past script executions">LOG</button>
-        <button class="tab-btn" data-tab="macro" title="Chain multiple scripts into a sequence">MACRO</button>
+        <button class="tab-btn tab-btn-action" id="btn-manage-macros" title="Manage saved macro chains">MACROS</button>
     </nav>
 
     <!-- TAB CONTENT -->
@@ -78,8 +115,24 @@
         <!-- ── EDITOR TAB ──────────────────────────────────── -->
         <div class="tab-panel active" id="tab-editor">
 
+            <!-- Active script identity bar -->
+            <div id="editor-script-header">
+                <span id="editor-script-label">UNSAVED</span>
+                <button class="btn-ghost" id="btn-quick-overwrite" title="Overwrite the loaded library entry with current code" style="display:none; padding:1px 6px; font-size:9px;">↑ OVERWRITE</button>
+                <select id="editor-script-dropdown" title="Switch to a saved library script">
+                    <option value="">— SWITCH SCRIPT —</option>
+                </select>
+            </div>
+
             <!-- CodeMirror mounts here -->
             <div id="editor-container">
+                <div class="editor-clear-overlay">
+                    <button class="editor-clear-btn" type="button" id="editor-clear-btn" aria-label="Clear editor" title="Clear editor">
+                        <svg viewBox="-0.43 -0.42 25.71 52.68" class="btn-icon">
+                            <path d="M24.48,26.26c-9.38.66-14.29,6.21-23.15,25.2,7.75-19.06,7.67-24.83-.96-25.88,9.38-.66,14.29-6.21,23.15-25.2-7.75,19.06-7.67,24.83.96,25.88Z" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
                 <textarea id="editor-fallback" spellcheck="false" placeholder="// Write your ExtendScript here..."></textarea>
             </div>
 
@@ -147,8 +200,8 @@
             </div>
 
             <div id="library-empty" class="empty-state">
-                <span>NO SCRIPTURES SAVED</span>
-                <span class="sub">RUN A SCRIPT AND HIT ✚ SAVE</span>
+                <span id="library-empty-title">NO SCRIPTURES SAVED</span>
+                <span class="sub" id="library-empty-sub">RUN A SCRIPT AND HIT ✚ SAVE</span>
             </div>
 
         </div><!-- /tab-library -->
@@ -172,55 +225,15 @@
 
         </div><!-- /tab-history -->
 
-        <!-- ── MACRO TAB ───────────────────────────────────── -->
-        <div class="tab-panel" id="tab-macro">
-
-            <div class="macro-toolbar">
-                <input type="text" id="macro-name-input" class="search-input" placeholder="MACRO NAME..." spellcheck="false" autocomplete="off">
-                <button class="btn-secondary" id="btn-save-macro" style="padding:7px 10px; font-size:9px; flex-shrink:0;">SAVE</button>
-                <button class="btn-ghost" id="btn-clear-macro" style="padding:7px 8px; font-size:9px; flex-shrink:0; border-left:1px solid var(--border-subtle); border-radius:0;">CLEAR</button>
-            </div>
-
-            <div id="macro-chain">
-                <!-- steps rendered by JS -->
-            </div>
-
-            <div id="macro-chain-empty" class="empty-state">
-                <span>NO STEPS</span>
-                <span class="sub">ADD SCRIPTS FROM YOUR LIBRARY BELOW</span>
-            </div>
-
-            <div class="macro-add-area">
-                <select id="macro-script-picker">
-                    <option value="">— ADD FROM LIBRARY —</option>
-                </select>
-                <button class="btn-secondary" id="btn-macro-add-step" style="padding:6px 10px; font-size:9px; flex-shrink:0;">+ STEP</button>
-            </div>
-
-            <div class="macro-controls">
-                <button class="btn-primary btn-full" id="btn-cast-macro">▶ CAST MACRO</button>
-                <div class="macro-error-row">
-                    <span class="macro-label">ON ERROR:</span>
-                    <select id="macro-on-error">
-                        <option value="abort">ABORT</option>
-                        <option value="continue">CONTINUE</option>
-                    </select>
-                </div>
-            </div>
-
-            <div class="saved-macros-section">
-                <div class="saved-macros-header">SAVED MACROS</div>
-                <div id="saved-macros-list">
-                    <!-- saved macros rendered by JS -->
-                </div>
-                <div id="saved-macros-empty" class="empty-state" style="padding:16px;">
-                    <span class="sub">NO SAVED MACROS YET</span>
-                </div>
-            </div>
-
-        </div><!-- /tab-macro -->
+        <!-- MACRO TAB REMOVED — access saved macros via MACROS button in tab nav -->
 
     </div><!-- /tab-content -->
+
+    <!-- ── AGENT LIBRARY TOGGLE ─────────────────────────────────
+         Visible only when Library tab is active. Small, low-contrast,
+         not promoted — exists for Holy Agent / power users only.
+    ─────────────────────────────────────────────────────────── -->
+    <button id="btn-agent-library" title="Switch to Agent Library">AGENT LIB</button>
 
 </div><!-- /app -->
 
@@ -254,6 +267,62 @@
     </div>
 </div>
 
+<!-- ── SAVE OPTIONS MODAL ─────────────────────────────────────── -->
+<div id="modal-save-options">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">✚ SAVE SCRIPT</span>
+            <button class="btn-ghost" id="btn-save-opts-close" style="padding:2px 6px;">✕</button>
+        </div>
+        <div class="modal-body">
+            <button class="btn-primary btn-full" id="btn-save-overwrite" style="display:none; margin-bottom:6px;">↑ OVERWRITE EXISTING</button>
+            <button class="btn-secondary btn-full" id="btn-save-as-new" style="margin-bottom:6px;">✚ SAVE AS NEW</button>
+            <button class="btn-secondary btn-full" id="btn-save-export">⬇ EXPORT .JSX TO HOLY STORAGE</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── MANAGE MACROS MODAL ────────────────────────────────────── -->
+<div id="modal-manage-macros">
+    <div class="modal-box modal-box-wide">
+        <div class="modal-header">
+            <span class="modal-title">⊞ MANAGE MACROS</span>
+            <button class="btn-ghost" id="btn-manage-macros-close" style="padding:2px 6px;">✕</button>
+        </div>
+        <div class="modal-body modal-body-macros">
+            <div id="manage-macros-list">
+                <!-- macro rows rendered by JS -->
+            </div>
+            <div id="manage-macros-empty" class="empty-state" style="padding:16px 0;">
+                <span class="sub">NO SAVED MACROS</span>
+                <span class="sub" style="margin-top:4px; font-size:9px; color: var(--text-faint);">ASK HOLY AGENT TO CHAIN SCRIPTS AND SAVE AS A MACRO</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── UNSAVED CHANGES MODAL ──────────────────────────────────── -->
+<div id="modal-unsaved">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">⚠ UNSAVED CHANGES</span>
+        </div>
+        <div class="modal-body">
+            <p style="margin:0; font-size:10px; line-height:1.6; color:var(--hp-text-dim);">The editor has unsaved changes. Loading a new script will discard them.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-danger" id="btn-unsaved-continue">DISCARD &amp; LOAD</button>
+            <button class="btn-secondary" id="btn-unsaved-cancel">CANCEL</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── MACRO PRO TIP TOAST ────────────────────────────────────── -->
+<div id="macro-pro-tip">
+    <span>💡 Ask Holy Agent "chain these scripts" to save as a macro.</span>
+    <button class="toast-close" id="btn-macro-pro-tip-close" title="Dismiss">✕</button>
+</div>
+
 <!-- ── SCRIPTS ───────────────────────────────────────────────── -->
 
 <!-- CEP Interface -->
@@ -266,6 +335,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+
+<!-- Holy Scripture agent library seed -->
+<script src="js/seed-agent-library.js"></script>
 
 <!-- Holy Scripture main logic -->
 <script src="js/main.js"></script>

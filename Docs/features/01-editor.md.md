@@ -24,8 +24,13 @@ Clicking "Cast Script" reads the raw string content directly from the active Cod
 ## 1.3 Saving
 
 Users can save the current editor content to the Library directly from this tab.
-- This triggers a custom HTML/CSS modal (`#modal-overlay`) to input the script name and category.
-- **Note:** Currently, there is no "Quick Overwrite" or auto-save if a script was loaded from the library. Saving creates a new entry or overwrites purely based on name matching (this is flagged for improvement in `ROADMAP.md`).
+- Clicking **✚ SAVE** opens a three-choice save options modal: **Overwrite** (available when a library entry is currently loaded), **Save As New** (opens the name/category modal), and **Export .JSX to Holy Storage** (writes a `.jsx` file to `%APPDATA%\Roaming\Holy Storage\Holy_Scripture\` via ExtendScript).
+- A **Quick Overwrite** button (`↑ OVERWRITE`) appears in the script identity bar whenever the editor has an active library entry loaded and the content has been modified.
+- The save flow is handled via `storage` abstraction — see `ARCHITECTURE.md` for dual-write behaviour.
+
+## 1.4 Script Identity Bar
+
+A persistent bar above the CodeMirror instance displays the name of the currently loaded library script (or `UNSAVED` if none). An asterisk (`*`) is appended to the name whenever `state.isDirty` is true. A dropdown selector allows switching between all library entries without navigating to the Library tab; loading a new entry while `isDirty` is true triggers the unsaved-changes confirmation modal.
 
 ---
 
@@ -38,3 +43,4 @@ Users can save the current editor content to the Library directly from this tab.
 ## Dev Log
 
 - 1: Initial feature documentation.
+- 2: Added script identity bar (`#editor-script-header`) above the editor. Tracks `state.activeScript` (set on load or save) and `state.isDirty` (set on any CodeMirror change, cleared on load/save). Save button now opens a three-choice options modal instead of directly opening the name modal. Quick Overwrite button added inline in the identity bar. Unsaved-changes guard added to `loadLibraryScriptToEditor()` — shows custom HTML modal, never native `confirm()`. Header reorganised: context bar (comp name, fps, layers, timecode) moved into the main `#header` row alongside branding.

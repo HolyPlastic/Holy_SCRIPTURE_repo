@@ -12,6 +12,7 @@
     // ============================================================
     var STORAGE_SLOTS   = 'hs_slots';
     var STORAGE_LIBRARY = 'hs_library';
+    var STORAGE_AGENT_LIBRARY = 'hs_agent_library';
     var STORAGE_HISTORY = 'hs_history';
     var STORAGE_MACROS  = 'hs_macros';
     var MAX_HISTORY     = 100;
@@ -24,11 +25,15 @@
         activeTab: 'editor',
         slots: [],
         library: { categories: [], scripts: [] },
+        agentLibrary: { scripts: [] },
+        libraryMode: 'user',
         history: [],
         params: [],             // script parameter rows for the editor
         macros: [],             // saved macros
         macroChain: [],         // current working macro chain steps
-        pendingSaveCode: null   // code queued for the save modal
+        pendingSaveCode: null,  // code queued for the save modal
+        activeScript: null,     // { id, name } of the library entry currently in the editor, or null
+        isDirty: false          // true if the editor has unsaved changes since last load/save
     };
 
     // shortcut recording state
@@ -50,6 +55,127 @@
         var skinInfo = cs.getHostEnvironment().appSkinInfo;
         if (skinInfo) {
             document.body.style.fontSize = skinInfo.baseFontSize + 'px';
+        }
+    }
+
+    function reloadHostScript(callback) {
+        if (!isInCEP || !cs) {
+            if (callback) callback();
+            return;
+        }
+
+        try {
+            var extPath = cs.getSystemPath(SystemPath.EXTENSION);
+            var jsxPath = extPath.replace(/\\/g, "/") + "/jsx/hostscript.jsx";
+            cs.evalScript('$.evalFile("' + jsxPath + '")', function(result) {
+                if (result && result !== 'EvalScript error.') {
+                    console.log('[Holy Scripture] hostscript.jsx reloaded');
+                } else {
+                    console.warn('[Holy Scripture] hostscript.jsx reload returned:', result);
+                }
+                if (callback) callback();
+            });
+        } catch (e) {
+            console.warn('[Holy Scripture] hostscript.jsx reload error:', e);
+            if (callback) callback();
+        }
+    }
+
+    // ============================================================
+    // STORAGE ABSTRACTION
+    // Drop-in replacement for localStorage. In CEP, every write
+    // also fires an async file write to Holy Storage/Holy_Scripture
+    // via ExtendScript. Reads always come from localStorage (sync).
+    // On startup, loadFromFilesOnStartup() fires an async read and
+    // re-populates state if file data exists.
+    // ============================================================
+    var storage = {
+        getItem: function(key) {
+            return localStorage.getItem(key);
+        },
+        setItem: function(key, val) {
+            localStorage.setItem(key, val);
+            if (isInCEP && cs) {
+                cs.evalScript(
+                    'HS_saveData(' + JSON.stringify(key) + ',' + JSON.stringify(val) + ')',
+                    function() {}
+                );
+            }
+        },
+        removeItem: function(key) {
+            localStorage.removeItem(key);
+            if (isInCEP && cs) {
+                cs.evalScript(
+                    'HS_saveData(' + JSON.stringify(key) + ',null)',
+                    function() {}
+                );
+            }
+        }
+    };
+
+    // ============================================================
+    // ACCENT COLOR
+    // ============================================================
+    var DEFAULT_ACCENT = '#ff2c72';
+
+    function hexToRgb_accent(hex) {
+        var clean = hex.replace('#', '');
+        var bigint = parseInt(clean, 16);
+        return {
+            r: (bigint >> 16) & 255,
+            g: (bigint >> 8) & 255,
+            b: bigint & 255
+        };
+    }
+
+    function setAccentColor(hex) {
+        var rgb = hexToRgb_accent(hex);
+        var r1 = rgb.r / 255, g1 = rgb.g / 255, b1 = rgb.b / 255;
+        var max = Math.max(r1, g1, b1), min = Math.min(r1, g1, b1);
+        var h = 0, s = 0, l = (max + min) / 2;
+        if (max !== min) {
+            var d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            if (max === r1)      h = (g1 - b1) / d + (g1 < b1 ? 6 : 0);
+            else if (max === g1) h = (b1 - r1) / d + 2;
+            else                 h = (r1 - g1) / d + 4;
+            h /= 6;
+        }
+        var root = document.documentElement;
+        root.style.setProperty('--accent', hex);
+        root.style.setProperty('--ACCENT-H', Math.round(h * 360));
+        root.style.setProperty('--ACCENT-S', Math.round(s * 100) + '%');
+        root.style.setProperty('--ACCENT-L', Math.round(l * 100) + '%');
+        root.style.setProperty('--ACCENT-RGB', rgb.r + ', ' + rgb.g + ', ' + rgb.b);
+    }
+
+    function initAccentColor() {
+        var saved = localStorage.getItem('hs_themeColor');
+        if (saved && /^#[0-9a-fA-F]{6}$/.test(saved)) {
+            setAccentColor(saved);
+        }
+
+        if (isInCEP && cs) {
+            cs.addEventListener('holy.scripture.color.change', function (e) {
+                try {
+                    var data = (typeof e.data === 'string') ? JSON.parse(e.data || '{}') : e.data;
+                    if (data && typeof data.hex === 'string') {
+                        setAccentColor(data.hex);
+                        localStorage.setItem('hs_themeColor', data.hex);
+                    }
+                } catch (err) {
+                    console.warn('[Holy Scripture] Failed to apply color event', err);
+                }
+            });
+        }
+
+        var settingsBtn = document.getElementById('btn-settings');
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', function () {
+                if (isInCEP && cs) {
+                    cs.requestOpenExtension('com.holyplastic.holyscripture.settings', '');
+                }
+            });
         }
     }
 
@@ -99,6 +225,14 @@
 
         // Remove the fallback since CM is mounted
         fallback.remove();
+
+        // Mark editor dirty on any change
+        editor.on('change', function() {
+            if (!state.isDirty) {
+                state.isDirty = true;
+                updateEditorScriptHeader();
+            }
+        });
     }
 
     function getEditorCode() {
@@ -115,6 +249,8 @@
             var fb = document.getElementById('editor-fallback');
             if (fb) fb.value = code || '';
         }
+        state.isDirty = false;
+        updateEditorScriptHeader();
     }
 
     // ============================================================
@@ -123,16 +259,18 @@
     function initTabs() {
         document.querySelectorAll('.tab-btn').forEach(function(btn) {
             btn.addEventListener('click', function() {
+                // tab-btn-action buttons open dialogs instead of switching tabs
+                if (this.classList.contains('tab-btn-action')) return;
                 switchTab(this.dataset.tab);
             });
         });
 
-        // Mouse-wheel over the tab bar scrolls between tabs
+        // Mouse-wheel over the tab bar scrolls between normal tabs only
         var nav = document.getElementById('tab-nav');
         if (nav) {
             nav.addEventListener('wheel', function(e) {
                 e.preventDefault();
-                var btns = [].slice.call(document.querySelectorAll('.tab-btn'));
+                var btns = [].slice.call(document.querySelectorAll('.tab-btn:not(.tab-btn-action)'));
                 var currentIdx = -1;
                 btns.forEach(function(b, i) {
                     if (b.dataset.tab === state.activeTab) currentIdx = i;
@@ -156,8 +294,22 @@
         if (name === 'editor' && editor) {
             setTimeout(function() { editor.refresh(); }, 10);
         }
-        if (name === 'macro') {
-            rebuildMacroPicker();
+        updateAgentLibraryToggle();
+    }
+
+    function updateAgentLibraryToggle() {
+        var agentLibBtn = document.getElementById('btn-agent-library');
+        if (!agentLibBtn) return;
+
+        agentLibBtn.style.display = (state.activeTab === 'library') ? 'inline-block' : 'none';
+        if (state.libraryMode === 'agent') {
+            agentLibBtn.textContent = 'USER LIB';
+            agentLibBtn.title = 'Switch to User Library';
+            agentLibBtn.classList.add('is-active');
+        } else {
+            agentLibBtn.textContent = 'AGENT LIB';
+            agentLibBtn.title = 'Switch to Agent Library';
+            agentLibBtn.classList.remove('is-active');
         }
     }
 
@@ -288,7 +440,7 @@
 
         if (!trimmed) {
             logConsole('info', '> NO CODE TO RUN');
-            if (onComplete) onComplete(false, { message: 'No code' });
+            if (onComplete) onComplete(false, { message: 'No code' }, null);
             return;
         }
 
@@ -304,7 +456,7 @@
             // Dev/browser mode: simulate the call
             logConsole('info', '> [DEV MODE] CEP not available — script not sent to AE');
             addToHistory(sourceName, trimmed, false, { message: 'CEP not available in dev mode' });
-            if (onComplete) onComplete(false, { message: 'CEP not available' });
+            if (onComplete) onComplete(false, { message: 'CEP not available' }, null);
             return;
         }
 
@@ -317,7 +469,7 @@
                     var errMsg = 'Internal evalScript error — check AE scripting preferences.';
                     logConsole('error', '> ✗ ' + errMsg);
                     addToHistory(sourceName, trimmed, false, { message: errMsg });
-                    if (onComplete) onComplete(false, { message: errMsg });
+                    if (onComplete) onComplete(false, { message: errMsg }, null);
                     return;
                 }
 
@@ -327,7 +479,7 @@
                 } catch(e) {
                     logConsole('error', '> ✗ Could not parse response: ' + result);
                     addToHistory(sourceName, trimmed, false, { message: 'Parse error: ' + result });
-                    if (onComplete) onComplete(false, { message: 'Parse error' });
+                    if (onComplete) onComplete(false, { message: 'Parse error' }, null);
                     return;
                 }
 
@@ -345,7 +497,13 @@
                     }
                     flickerBtn(document.getElementById('btn-run'));
                     addToHistory(sourceName, trimmed, true, null);
-                    if (onComplete) onComplete(true, null);
+                    if (onComplete) onComplete(true, null, {
+                        success: true,
+                        output: data.output || '',
+                        logs: data.logs || [],
+                        duration: duration,
+                        raw: data
+                    });
                 } else {
                     var e = data.error || {};
                     logConsole('error', '> ✗ ' + (e.name || 'Error') + ': ' + (e.message || '?'));
@@ -353,7 +511,14 @@
                         logConsole('error', '  Line: ' + e.line);
                     }
                     addToHistory(sourceName, trimmed, false, e);
-                    if (onComplete) onComplete(false, e);
+                    if (onComplete) onComplete(false, e, {
+                        success: false,
+                        output: data.output || '',
+                        logs: data.logs || [],
+                        duration: duration,
+                        error: e,
+                        raw: data
+                    });
                 }
             }
         );
@@ -361,6 +526,83 @@
 
     function runEditorScript() {
         runScript(getEditorCode(), 'EDITOR');
+    }
+
+    function runAgentLibraryScript(scriptId, scriptName, argsObj, onComplete) {
+        var label = scriptName || scriptId || 'AGENT SCRIPT';
+        var argsJson = JSON.stringify(argsObj || {});
+        var historyCode = '// Agent Library: ' + String(scriptId || '');
+
+        logConsole('run', '> CASTING AGENT SCRIPT: ' + label + '...');
+
+        if (!isInCEP) {
+            logConsole('info', '> [DEV MODE] CEP not available - agent script not sent to AE');
+            addToHistory(label, historyCode, false, { message: 'CEP not available in dev mode' });
+            if (onComplete) onComplete(false, { message: 'CEP not available' }, null);
+            return;
+        }
+
+        var start = Date.now();
+        cs.evalScript(
+            'HS_runAgentScript(' + JSON.stringify(scriptId) + ',' + JSON.stringify(argsJson) + ')',
+            function(result) {
+                var duration = Date.now() - start;
+
+                if (!result || result === 'EvalScript error.') {
+                    var errMsg = 'Internal evalScript error - check AE scripting preferences.';
+                    logConsole('error', '> X ' + errMsg);
+                    addToHistory(label, historyCode, false, { message: errMsg });
+                    if (onComplete) onComplete(false, { message: errMsg }, null);
+                    return;
+                }
+
+                var data;
+                try {
+                    data = JSON.parse(result);
+                } catch (e) {
+                    logConsole('error', '> X Could not parse response: ' + result);
+                    addToHistory(label, historyCode, false, { message: 'Parse error: ' + result });
+                    if (onComplete) onComplete(false, { message: 'Parse error' }, null);
+                    return;
+                }
+
+                if (data.logs && data.logs.length > 0) {
+                    data.logs.forEach(function(msg) {
+                        logConsole('log', '  LOG: ' + msg);
+                    });
+                }
+
+                if (data.success) {
+                    logConsole('success', '> OK [' + duration + 'ms]');
+                    if (data.output) {
+                        logConsole('output', '  -> ' + data.output);
+                    }
+                    addToHistory(label, historyCode, true, null);
+                    if (onComplete) onComplete(true, null, {
+                        success: true,
+                        output: data.output || '',
+                        logs: data.logs || [],
+                        duration: duration,
+                        raw: data
+                    });
+                } else {
+                    var err = data.error || {};
+                    logConsole('error', '> X ' + (err.name || 'Error') + ': ' + (err.message || '?'));
+                    if (err.line && err.line !== 'N/A') {
+                        logConsole('error', '  Line: ' + err.line);
+                    }
+                    addToHistory(label, historyCode, false, err);
+                    if (onComplete) onComplete(false, err, {
+                        success: false,
+                        output: data.output || '',
+                        logs: data.logs || [],
+                        duration: duration,
+                        error: err,
+                        raw: data
+                    });
+                }
+            }
+        );
     }
 
     // ============================================================
@@ -401,6 +643,151 @@
         btn.addEventListener('animationend', function() {
             btn.classList.remove('btn-activated');
         }, { once: true });
+    }
+
+    // ============================================================
+    // SCRIPT IDENTITY & SAVE FLOW
+    // Manages the active-script state, the editor header display,
+    // the three-choice save menu, quick overwrite, and .jsx export.
+    // ============================================================
+
+    function updateEditorScriptHeader() {
+        var label   = document.getElementById('editor-script-label');
+        var overBtn = document.getElementById('btn-quick-overwrite');
+        if (!label) return;
+
+        if (state.activeScript) {
+            label.textContent = state.activeScript.name + (state.isDirty ? ' *' : '');
+            label.classList.toggle('is-dirty', state.isDirty);
+            if (overBtn) overBtn.style.display = state.isDirty ? 'inline-block' : 'none';
+        } else {
+            label.textContent = 'UNSAVED';
+            label.classList.remove('is-dirty');
+            if (overBtn) overBtn.style.display = 'none';
+        }
+    }
+
+    function rebuildScriptDropdown() {
+        var sel = document.getElementById('editor-script-dropdown');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— SWITCH SCRIPT —</option>';
+        state.library.scripts.forEach(function(s) {
+            var opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            if (state.activeScript && state.activeScript.id === s.id) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    }
+
+    function loadLibraryScriptToEditor(scriptId) {
+        var s = state.library.scripts.find(function(x) { return x.id === scriptId; });
+        if (!s) return;
+
+        function doLoad() {
+            setEditorCode(s.code);
+            if (s.params && s.params.length > 0) {
+                state.params = JSON.parse(JSON.stringify(s.params));
+                renderParams();
+                var body   = document.getElementById('params-body');
+                var toggle = document.getElementById('btn-params-toggle');
+                if (body)   body.classList.add('open');
+                if (toggle) toggle.textContent = '▲';
+            }
+            state.activeScript = { id: s.id, name: s.name };
+            state.isDirty = false;
+            updateEditorScriptHeader();
+            rebuildScriptDropdown();
+            switchTab('editor');
+        }
+
+        if (state.isDirty) {
+            openUnsavedModal(doLoad);
+        } else {
+            doLoad();
+        }
+    }
+
+    function openUnsavedModal(onContinue) {
+        var overlay = document.getElementById('modal-unsaved');
+        if (!overlay) { onContinue(); return; }
+        overlay.classList.add('open');
+
+        var btnCont   = document.getElementById('btn-unsaved-continue');
+        var btnCancel = document.getElementById('btn-unsaved-cancel');
+
+        function cleanup() {
+            overlay.classList.remove('open');
+            btnCont.removeEventListener('click', handleContinue);
+            btnCancel.removeEventListener('click', handleCancel);
+        }
+        function handleContinue() { cleanup(); onContinue(); }
+        function handleCancel()   { cleanup(); }
+
+        if (btnCont)   btnCont.addEventListener('click', handleContinue);
+        if (btnCancel) btnCancel.addEventListener('click', handleCancel);
+    }
+
+    function openSaveOptionsModal() {
+        var overlay  = document.getElementById('modal-save-options');
+        var overBtn  = document.getElementById('btn-save-overwrite');
+        if (!overlay) return;
+        if (overBtn) overBtn.style.display = state.activeScript ? 'block' : 'none';
+        overlay.classList.add('open');
+    }
+
+    function closeSaveOptionsModal() {
+        var overlay = document.getElementById('modal-save-options');
+        if (overlay) overlay.classList.remove('open');
+    }
+
+    function quickOverwrite() {
+        if (!state.activeScript) return;
+        var s = state.library.scripts.find(function(x) { return x.id === state.activeScript.id; });
+        if (!s) return;
+        s.code = getEditorCode();
+        s.name = state.activeScript.name; // name unchanged
+        saveLibrary();
+        renderLibrary();
+
+        // Sync any slots linked to this library entry
+        var synced = false;
+        state.slots.forEach(function(slot) {
+            if (slot.libraryId === s.id) {
+                slot.code = s.code;
+                slot.name = s.name;
+                synced = true;
+            }
+        });
+        if (synced) { saveSlots(); renderSlots(); }
+
+        state.isDirty = false;
+        updateEditorScriptHeader();
+        closeSaveOptionsModal();
+        logConsole('success', '> ✓ OVERWRITTEN: ' + s.name);
+    }
+
+    function exportScriptToHolyStorage() {
+        if (!isInCEP || !cs) {
+            logConsole('info', '> [DEV MODE] Export not available outside CEP');
+            closeSaveOptionsModal();
+            return;
+        }
+        var name = (state.activeScript ? state.activeScript.name : 'HOLY_SCRIPT')
+                       .replace(/[^A-Z0-9_\- ]/gi, '_')
+                       .replace(/\s+/g, '_');
+        var code = getEditorCode();
+        cs.evalScript(
+            'HS_exportScript(' + JSON.stringify(name) + ',' + JSON.stringify(code) + ')',
+            function(result) {
+                if (result && result !== 'EvalScript error.') {
+                    logConsole('success', '> ✓ EXPORTED: ' + name + '.jsx');
+                } else {
+                    logConsole('error', '> ✗ Export failed');
+                }
+            }
+        );
+        closeSaveOptionsModal();
     }
 
     // ============================================================
@@ -464,6 +851,10 @@
         saveLibrary();
         renderLibrary();
         closeSaveModal();
+        state.activeScript = { id: script.id, name: script.name };
+        state.isDirty = false;
+        updateEditorScriptHeader();
+        rebuildScriptDropdown();
         logConsole('success', '> ✓ SAVED: ' + script.name);
     }
 
@@ -471,7 +862,7 @@
     // QUICK SLOTS
     // ============================================================
     function initSlots() {
-        var stored = localStorage.getItem(STORAGE_SLOTS);
+        var stored = storage.getItem(STORAGE_SLOTS);
         if (stored) {
             try { state.slots = JSON.parse(stored); } catch(e) { state.slots = []; }
         }
@@ -490,8 +881,9 @@
             name: name || 'SLOT',
             code: '',
             expanded: true,
-            shortcut: null, // { key, ctrl, alt, shift }
-            size: 'full'    // 'full' = own row | 'half' = shares row with adjacent half slot
+            shortcut: null,   // { key, ctrl, alt, shift }
+            size: 'full',     // 'full' = own row | 'half' = shares row with adjacent half slot
+            libraryId: null   // id of linked library entry, or null if unlinked
         };
     }
 
@@ -585,17 +977,31 @@
             var scLabel = formatShortcut(slot.shortcut);
             var scClass = 'slot-shortcut-btn' + (slot.shortcut ? ' has-shortcut' : '');
 
+            // Build library link dropdown options
+            var libOpts = '<option value="">— LINK LIBRARY —</option>';
+            state.library.scripts.forEach(function(s) {
+                var sel = (slot.libraryId === s.id) ? ' selected' : '';
+                libOpts += '<option value="' + escHtml(s.id) + '"' + sel + '>' + escHtml(s.name) + '</option>';
+            });
+            var isLinked = !!slot.libraryId;
+            var linkedBadge = isLinked ? '<span class="slot-linked-badge" title="Linked to library entry — content syncs on overwrite">⇌ LINKED</span>' : '';
+
             item.innerHTML = [
                 '<div class="slot-header">',
                     '<span class="slot-drag-handle" title="Drag to reorder">⠿</span>',
                     '<input class="slot-name-input" type="text" value="' + escHtml(slot.name) + '" ',
                         'data-slot-name="' + slot.id + '" placeholder="NAME" spellcheck="false" autocomplete="off">',
+                    linkedBadge,
+                    '<select class="slot-lib-link" data-slot-lib-link="' + slot.id + '" title="Link slot to a library entry — content syncs on overwrite">',
+                        libOpts,
+                    '</select>',
                     '<button class="' + scClass + '" data-slot-shortcut="' + slot.id + '" title="Click to set shortcut">' + escHtml(scLabel) + '</button>',
                     '<button class="slot-toggle" data-slot-toggle="' + slot.id + '">' + (slot.expanded ? '▲' : '▼') + '</button>',
                     '<button class="btn-icon del-icon" data-slot-del="' + slot.id + '" title="Remove slot">✕</button>',
                 '</div>',
                 '<div class="slot-code-area ' + (slot.expanded ? 'expanded' : '') + '" data-slot-code="' + slot.id + '">',
-                    '<textarea class="slot-textarea" data-slot-textarea="' + slot.id + '"',
+                    '<textarea class="slot-textarea' + (isLinked ? ' slot-textarea-linked' : '') + '" data-slot-textarea="' + slot.id + '"',
+                        (isLinked ? ' readonly title="Content synced from linked library entry — edit via Library tab"' : ''),
                         ' spellcheck="false" placeholder="// Script code...">' + escHtml(slot.code) + '</textarea>',
                     '<div class="slot-footer">',
                         '<button class="btn-primary" data-slot-run="' + slot.id + '">▶ RUN</button>',
@@ -621,6 +1027,26 @@
             inp.addEventListener('change', function() {
                 var slot = getSlot(this.dataset.slotName);
                 if (slot) { slot.name = this.value; saveSlots(); }
+            });
+        });
+
+        // Library link dropdown — set/clear libraryId; sync code+name from library when linking
+        list.querySelectorAll('[data-slot-lib-link]').forEach(function(sel) {
+            sel.addEventListener('change', function() {
+                var slot = getSlot(this.dataset.slotLibLink);
+                if (!slot) return;
+                var newLibId = this.value || null;
+                slot.libraryId = newLibId;
+                if (newLibId) {
+                    // Pull content from library entry immediately
+                    var libScript = state.library.scripts.find(function(s) { return s.id === newLibId; });
+                    if (libScript) {
+                        slot.code = libScript.code;
+                        slot.name = libScript.name;
+                    }
+                }
+                saveSlots();
+                renderSlots(); // re-render to show/hide badge
             });
         });
 
@@ -921,19 +1347,21 @@
     }
 
     function saveSlots() {
-        localStorage.setItem(STORAGE_SLOTS, JSON.stringify(state.slots));
+        storage.setItem(STORAGE_SLOTS, JSON.stringify(state.slots));
     }
 
     // ============================================================
     // LIBRARY
     // ============================================================
     function initLibrary() {
-        var stored = localStorage.getItem(STORAGE_LIBRARY);
+        var stored = storage.getItem(STORAGE_LIBRARY);
         if (stored) {
             try { state.library = JSON.parse(stored); } catch(e) {}
         }
         if (!state.library.categories) state.library.categories = [];
         if (!state.library.scripts)    state.library.scripts    = [];
+        initAgentLibrary();
+        updateLibraryToolbar();
         renderLibrary();
 
         // Search input
@@ -946,7 +1374,62 @@
     }
 
     function saveLibrary() {
-        localStorage.setItem(STORAGE_LIBRARY, JSON.stringify(state.library));
+        storage.setItem(STORAGE_LIBRARY, JSON.stringify(state.library));
+    }
+
+    function initAgentLibrary() {
+        var stored = storage.getItem(STORAGE_AGENT_LIBRARY);
+        var seed = window.HolyScriptureAgentLibrarySeed;
+        var seedVersion = seed && typeof seed.version === 'number' ? seed.version : 1;
+        var parsed = null;
+
+        if (!stored && seed && typeof seed.getDefaultLibrary === 'function') {
+            storage.setItem(STORAGE_AGENT_LIBRARY, JSON.stringify(seed.getDefaultLibrary()));
+            stored = storage.getItem(STORAGE_AGENT_LIBRARY);
+        }
+
+        if (stored) {
+            try {
+                parsed = JSON.parse(stored);
+                state.agentLibrary = parsed;
+            } catch (e) {}
+        }
+
+        if (seed && typeof seed.getDefaultLibrary === 'function') {
+            var storedVersion = parsed && typeof parsed.version === 'number' ? parsed.version : 0;
+            if (storedVersion < seedVersion) {
+                state.agentLibrary = seed.getDefaultLibrary();
+                storage.setItem(STORAGE_AGENT_LIBRARY, JSON.stringify(state.agentLibrary));
+            }
+        }
+        if (!state.agentLibrary || typeof state.agentLibrary !== 'object') {
+            state.agentLibrary = { scripts: [] };
+        }
+        if (!state.agentLibrary.scripts) {
+            state.agentLibrary.scripts = [];
+        }
+    }
+
+    function setLibraryMode(mode) {
+        state.libraryMode = (mode === 'agent') ? 'agent' : 'user';
+        updateAgentLibraryToggle();
+        updateLibraryToolbar();
+
+        var search = document.getElementById('library-search');
+        renderLibrary(search ? search.value.trim() : '');
+    }
+
+    function updateLibraryToolbar() {
+        var search = document.getElementById('library-search');
+        var importBtn = document.getElementById('btn-import-jsx');
+        if (search) {
+            search.placeholder = (state.libraryMode === 'agent')
+                ? 'SEARCH AGENT SCRIPTS...'
+                : 'SEARCH SCRIPTURES...';
+        }
+        if (importBtn) {
+            importBtn.style.display = (state.libraryMode === 'agent') ? 'none' : '';
+        }
     }
 
     function deleteScript(id) {
@@ -956,12 +1439,22 @@
     }
 
     function renderLibrary(query) {
+        if (state.libraryMode === 'agent') {
+            renderAgentLibrary(query);
+            return;
+        }
+
+        renderUserLibrary(query);
+    }
+
+    function renderUserLibrary(query) {
         var list  = document.getElementById('library-list');
         var empty = document.getElementById('library-empty');
         if (!list) return;
 
         list.innerHTML = '';
         query = (query || '').toUpperCase();
+        updateLibraryEmptyState('user', false);
 
         var filtered = state.library.scripts.filter(function(s) {
             if (!query) return true;
@@ -976,6 +1469,7 @@
         });
 
         if (filtered.length === 0) {
+            updateLibraryEmptyState('user', !!query);
             if (empty) empty.style.display = 'flex';
             return;
         }
@@ -1010,20 +1504,7 @@
         });
         list.querySelectorAll('[data-lib-load]').forEach(function(btn) {
             btn.addEventListener('click', function() {
-                var s = state.library.scripts.find(function(x) { return x.id === btn.dataset.libLoad; });
-                if (s) {
-                    setEditorCode(s.code);
-                    // Restore params if script has them
-                    if (s.params && s.params.length > 0) {
-                        state.params = JSON.parse(JSON.stringify(s.params));
-                        renderParams();
-                        var body = document.getElementById('params-body');
-                        var toggle = document.getElementById('btn-params-toggle');
-                        if (body) body.classList.add('open');
-                        if (toggle) toggle.textContent = '▲';
-                    }
-                    switchTab('editor');
-                }
+                loadLibraryScriptToEditor(btn.dataset.libLoad);
             });
         });
         list.querySelectorAll('[data-lib-del]').forEach(function(btn) {
@@ -1033,13 +1514,163 @@
                 }
             });
         });
+
+        rebuildScriptDropdown();
+    }
+
+    function renderAgentLibrary(query) {
+        var list  = document.getElementById('library-list');
+        var empty = document.getElementById('library-empty');
+        if (!list) return;
+
+        list.innerHTML = '';
+        query = (query || '').toUpperCase();
+        updateLibraryEmptyState('agent', false);
+
+        var filtered = state.agentLibrary.scripts.filter(function(script) {
+            var haystack = [
+                script.id || '',
+                script.name || '',
+                script.description || '',
+                script.category || ''
+            ].join(' ').toUpperCase();
+            return !query || haystack.indexOf(query) !== -1;
+        });
+
+        filtered.sort(function(a, b) {
+            return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+
+        if (filtered.length === 0) {
+            updateLibraryEmptyState('agent', !!query);
+            if (empty) empty.style.display = 'flex';
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+
+        filtered.forEach(function(script) {
+            var schema = script.argsSchema || {};
+            var schemaKeys = Object.keys(schema);
+            var hasArgs = schemaKeys.length > 0;
+
+            // Build inline args rows (one text input per key)
+            var argsRowsHtml = '';
+            if (hasArgs) {
+                argsRowsHtml = '<div class="agent-args-panel" data-agent-args-for="' + escHtml(script.id) + '">';
+                schemaKeys.forEach(function(key) {
+                    var hint = String(schema[key] || '');
+                    // Determine sensible default: use hint if it's a simple scalar, else empty
+                    var defVal = (typeof schema[key] === 'string' || typeof schema[key] === 'number' || typeof schema[key] === 'boolean')
+                        ? String(schema[key]) : '';
+                    // If hint looks like an enum list (contains |), show as select
+                    var isEnum = typeof schema[key] === 'string' && schema[key].indexOf('|') !== -1;
+                    var inputHtml;
+                    if (isEnum) {
+                        var opts = schema[key].split('|').map(function(o) { return o.trim(); });
+                        inputHtml = '<select class="agent-arg-input" data-arg-key="' + escHtml(key) + '">';
+                        opts.forEach(function(opt) {
+                            inputHtml += '<option value="' + escHtml(opt) + '">' + escHtml(opt) + '</option>';
+                        });
+                        inputHtml += '</select>';
+                    } else {
+                        var inputType = typeof schema[key] === 'boolean' ? 'checkbox' :
+                                       typeof schema[key] === 'number'  ? 'number'   : 'text';
+                        if (inputType === 'checkbox') {
+                            var chk = schema[key] ? ' checked' : '';
+                            inputHtml = '<input type="checkbox" class="agent-arg-input agent-arg-checkbox" data-arg-key="' + escHtml(key) + '"' + chk + '>';
+                        } else {
+                            inputHtml = '<input type="' + inputType + '" class="agent-arg-input" data-arg-key="' + escHtml(key) + '"'
+                                + ' value="' + escHtml(defVal) + '" placeholder="' + escHtml(hint) + '"'
+                                + ' spellcheck="false" autocomplete="off">';
+                        }
+                    }
+                    argsRowsHtml += '<div class="agent-arg-row">'
+                        + '<label class="agent-arg-label">' + escHtml(key) + '</label>'
+                        + inputHtml
+                        + '</div>';
+                });
+                argsRowsHtml += '</div>';
+            }
+
+            var item = document.createElement('div');
+            item.className = 'library-item library-item-agent';
+            item.innerHTML = [
+                '<div class="lib-item-row">',
+                    '<div class="lib-item-info">',
+                        '<div class="lib-item-name">' + escHtml(script.name) + '</div>',
+                        '<div class="lib-item-preview">' + escHtml(script.description || script.id || '') + '</div>',
+                        '<div class="lib-item-meta">ID: ' + escHtml(script.id) + ' | READ ONLY'
+                            + (hasArgs ? ' | <span class="agent-args-hint">' + schemaKeys.length + ' ARG' + (schemaKeys.length > 1 ? 'S' : '') + '</span>' : '') + '</div>',
+                    '</div>',
+                    '<div class="lib-item-actions">',
+                        (hasArgs ? '<button class="btn-icon agent-args-toggle" data-agent-args-toggle="' + escHtml(script.id) + '" title="Configure arguments">⚙</button>' : ''),
+                        '<button class="btn-icon run-icon" data-agent-run="' + escHtml(script.id) + '" title="Run agent script">▶</button>',
+                    '</div>',
+                '</div>',
+                argsRowsHtml
+            ].join('');
+            list.appendChild(item);
+        });
+
+        // Toggle args panel visibility
+        list.querySelectorAll('[data-agent-args-toggle]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var id = btn.getAttribute('data-agent-args-toggle');
+                var panel = list.querySelector('[data-agent-args-for="' + id + '"]');
+                if (!panel) return;
+                var open = panel.classList.toggle('open');
+                btn.classList.toggle('is-active', open);
+            });
+        });
+
+        list.querySelectorAll('[data-agent-run]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var id = btn.getAttribute('data-agent-run');
+                var script = state.agentLibrary.scripts.find(function(entry) { return entry.id === id; });
+                if (!script) return;
+
+                // Collect args from inline panel if present
+                var argsObj = {};
+                var panel = list.querySelector('[data-agent-args-for="' + id + '"]');
+                if (panel) {
+                    panel.querySelectorAll('[data-arg-key]').forEach(function(inp) {
+                        var key = inp.getAttribute('data-arg-key');
+                        if (inp.type === 'checkbox') {
+                            argsObj[key] = inp.checked;
+                        } else if (inp.type === 'number') {
+                            argsObj[key] = parseFloat(inp.value) || 0;
+                        } else {
+                            argsObj[key] = inp.value;
+                        }
+                    });
+                }
+
+                runAgentLibraryScript(script.id, script.name, argsObj);
+                flickerBtn(btn);
+            });
+        });
+    }
+
+    function updateLibraryEmptyState(mode, hasQuery) {
+        var title = document.getElementById('library-empty-title');
+        var sub = document.getElementById('library-empty-sub');
+        if (!title || !sub) return;
+
+        if (mode === 'agent') {
+            title.textContent = hasQuery ? 'NO MATCHING AGENT SCRIPTS' : 'NO AGENT SCRIPTS';
+            sub.textContent = hasQuery ? 'TRY A DIFFERENT SEARCH' : 'AGENT LIBRARY SEED NOT FOUND';
+            return;
+        }
+
+        title.textContent = hasQuery ? 'NO MATCHING SCRIPTURES' : 'NO SCRIPTURES SAVED';
+        sub.textContent = hasQuery ? 'TRY A DIFFERENT SEARCH' : 'RUN A SCRIPT AND HIT ✚ SAVE';
     }
 
     // ============================================================
     // HISTORY
     // ============================================================
     function initHistory() {
-        var stored = localStorage.getItem(STORAGE_HISTORY);
+        var stored = storage.getItem(STORAGE_HISTORY);
         if (stored) {
             try { state.history = JSON.parse(stored); } catch(e) { state.history = []; }
         }
@@ -1059,7 +1690,7 @@
         if (state.history.length > MAX_HISTORY) {
             state.history = state.history.slice(0, MAX_HISTORY);
         }
-        localStorage.setItem(STORAGE_HISTORY, JSON.stringify(state.history));
+        storage.setItem(STORAGE_HISTORY, JSON.stringify(state.history));
         renderHistory();
 
         // Badge the LOG tab if not active
@@ -1124,7 +1755,7 @@
 
     function clearHistory() {
         state.history = [];
-        localStorage.removeItem(STORAGE_HISTORY);
+        storage.removeItem(STORAGE_HISTORY);
         renderHistory();
     }
 
@@ -1217,11 +1848,62 @@
             });
         }
 
-        // Save to library (open modal)
+        // Save button → three-choice save options modal
         var btnSave = document.getElementById('btn-save');
         if (btnSave) {
             btnSave.addEventListener('click', function() {
-                openSaveModal(getEditorCode());
+                openSaveOptionsModal();
+            });
+        }
+
+        // Quick overwrite button (editor header)
+        var btnQuickOverwrite = document.getElementById('btn-quick-overwrite');
+        if (btnQuickOverwrite) {
+            btnQuickOverwrite.addEventListener('click', quickOverwrite);
+        }
+
+        // Script dropdown → switch active library entry
+        var scriptDropdown = document.getElementById('editor-script-dropdown');
+        if (scriptDropdown) {
+            scriptDropdown.addEventListener('change', function() {
+                if (this.value) loadLibraryScriptToEditor(this.value);
+                else this.value = ''; // reset to placeholder if blank chosen
+            });
+        }
+
+        // Editor clear button → clear the editor
+        var editorClearBtn = document.getElementById('editor-clear-btn');
+        if (editorClearBtn) {
+            editorClearBtn.addEventListener('click', function() {
+                if (editor) {
+                    editor.setValue('');
+                } else {
+                    var fb = document.getElementById('editor-fallback');
+                    if (fb) fb.value = '';
+                }
+                state.isDirty = false;
+                updateEditorScriptHeader();
+            });
+        }
+
+        // Save options modal buttons
+        var btnSaveOverwrite = document.getElementById('btn-save-overwrite');
+        var btnSaveAsNew     = document.getElementById('btn-save-as-new');
+        var btnSaveExport    = document.getElementById('btn-save-export');
+        var btnSaveOptsClose = document.getElementById('btn-save-opts-close');
+        if (btnSaveOverwrite) btnSaveOverwrite.addEventListener('click', quickOverwrite);
+        if (btnSaveAsNew)     btnSaveAsNew.addEventListener('click', function() {
+            closeSaveOptionsModal();
+            openSaveModal(getEditorCode());
+        });
+        if (btnSaveExport)    btnSaveExport.addEventListener('click', exportScriptToHolyStorage);
+        if (btnSaveOptsClose) btnSaveOptsClose.addEventListener('click', closeSaveOptionsModal);
+
+        // Close save-options modal on overlay click
+        var saveOptsOverlay = document.getElementById('modal-save-options');
+        if (saveOptsOverlay) {
+            saveOptsOverlay.addEventListener('click', function(e) {
+                if (e.target === saveOptsOverlay) closeSaveOptionsModal();
             });
         }
 
@@ -1263,6 +1945,14 @@
         var btnImport = document.getElementById('btn-import-jsx');
         if (btnImport) {
             btnImport.addEventListener('click', importJsx);
+        }
+
+        var btnAgentLibrary = document.getElementById('btn-agent-library');
+        if (btnAgentLibrary) {
+            btnAgentLibrary.addEventListener('click', function() {
+                setLibraryMode(state.libraryMode === 'agent' ? 'user' : 'agent');
+                flickerBtn(this);
+            });
         }
 
         // Modal events
@@ -1326,9 +2016,11 @@
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 if (state.activeTab === 'editor') runEditorScript();
             }
-            // Escape = close modal
+            // Escape = close modals
             if (e.key === 'Escape') {
                 closeSaveModal();
+                closeSaveOptionsModal();
+                closeManageMacrosDialog();
                 if (recordingSlotId) cancelShortcutRecording();
             }
 
@@ -1380,195 +2072,164 @@
     }
 
     // ============================================================
-    // MACRO BUILDER
+    // MACRO — EXECUTION LAYER (builder UI removed 2026-04-13)
+    // These functions remain intact because Holy Agent depends on them.
+    //
+    // Execution path: HolyAgent → HS_runMacro(macroId) in hostscript.jsx
+    // which resolves and runs macro steps via HS_runScript, entirely
+    // independent of this JS layer. executeMacro() is preserved for any
+    // future direct-JS callers and is the canonical client-side runner.
     // ============================================================
-    var macroDragSrcIndex = null;
 
-    function initMacro() {
-        var stored = localStorage.getItem(STORAGE_MACROS);
-        if (stored) {
-            try { state.macros = JSON.parse(stored); } catch(e) { state.macros = []; }
+    function normalizeMacroStep(step, index) {
+        step = step || {};
+
+        var normalized = {
+            id: step.id || ('step_' + Date.now() + '_' + index),
+            scriptId: step.scriptId || '',
+            name: step.name || ('STEP ' + (index + 1)),
+            code: step.code || '',
+            delay: Math.max(0, parseInt(step.delay, 10) || 0)
+        };
+
+        if (normalized.scriptId) {
+            var liveScript = state.library.scripts.find(function(script) {
+                return script.id === normalized.scriptId;
+            });
+            if (liveScript) {
+                normalized.name = liveScript.name || normalized.name;
+                normalized.code = liveScript.code || normalized.code;
+            }
         }
 
-        renderMacroChain();
-        renderSavedMacros();
-
-        var btnCast  = document.getElementById('btn-cast-macro');
-        var btnSave  = document.getElementById('btn-save-macro');
-        var btnClear = document.getElementById('btn-clear-macro');
-        var btnAdd   = document.getElementById('btn-macro-add-step');
-
-        if (btnCast)  btnCast.addEventListener('click', castMacro);
-        if (btnSave)  btnSave.addEventListener('click', saveMacro);
-        if (btnClear) btnClear.addEventListener('click', clearMacroChain);
-        if (btnAdd)   btnAdd.addEventListener('click', addMacroStepFromPicker);
+        return normalized;
     }
 
-    function rebuildMacroPicker() {
-        var sel = document.getElementById('macro-script-picker');
-        if (!sel) return;
-        sel.innerHTML = '<option value="">— ADD FROM LIBRARY —</option>';
-        state.library.scripts.forEach(function(s) {
-            var opt = document.createElement('option');
-            opt.value = s.id;
-            opt.textContent = s.name;
-            sel.appendChild(opt);
+    function cloneMacroSteps(steps) {
+        return (steps || []).map(function(step, index) {
+            return normalizeMacroStep(JSON.parse(JSON.stringify(step || {})), index);
         });
     }
 
-    function addMacroStepFromPicker() {
-        var sel = document.getElementById('macro-script-picker');
-        if (!sel || !sel.value) return;
-        var script = state.library.scripts.find(function(s) { return s.id === sel.value; });
-        if (!script) return;
-        state.macroChain.push({
-            id: 'step_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
-            scriptId: script.id,
-            name: script.name,
-            code: script.code,
-            delay: 0
-        });
-        sel.value = '';
-        renderMacroChain();
+    function getMacroHistoryCode(steps) {
+        return '[MACRO: ' + steps.map(function(step) { return step.name; }).join(' -> ') + ']';
     }
 
-    function removeMacroStep(stepId) {
-        state.macroChain = state.macroChain.filter(function(s) { return s.id !== stepId; });
-        renderMacroChain();
+    function getMacroConfig(sourceMacro) {
+        var macro = sourceMacro || {};
+        var name = ((macro.name || 'MACRO') + '').trim().toUpperCase() || 'MACRO';
+        var onError = macro.onError || 'abort';
+        var steps = cloneMacroSteps(macro.steps || state.macroChain);
+
+        return {
+            id: macro.id || null,
+            name: name,
+            onError: onError === 'continue' ? 'continue' : 'abort',
+            steps: steps
+        };
     }
 
-    function clearMacroChain() {
-        state.macroChain = [];
-        renderMacroChain();
-        var nameInp = document.getElementById('macro-name-input');
-        if (nameInp) nameInp.value = '';
-    }
+    function executeMacro(config, onComplete) {
+        var steps = config.steps || [];
+        var macroName = config.name || 'MACRO';
+        var onError = config.onError === 'continue' ? 'continue' : 'abort';
+        var historyCode = getMacroHistoryCode(steps);
+        var results = [];
+        var index = 0;
 
-    function setStepStatus(stepId, status) {
-        var el = document.querySelector('.macro-step[data-step-id="' + stepId + '"]');
-        if (!el) return;
-        el.classList.remove('step-running', 'step-ok', 'step-error');
-        if (status) el.classList.add('step-' + status);
-    }
-
-    function renderMacroChain() {
-        var chain   = document.getElementById('macro-chain');
-        var empty   = document.getElementById('macro-chain-empty');
-        if (!chain) return;
-
-        chain.innerHTML = '';
-
-        if (state.macroChain.length === 0) {
-            if (empty) empty.style.display = 'flex';
-            rebuildMacroPicker();
-            return;
-        }
-        if (empty) empty.style.display = 'none';
-
-        state.macroChain.forEach(function(step, i) {
-            var item = document.createElement('div');
-            item.className = 'macro-step';
-            item.dataset.stepId = step.id;
-            item.draggable = true;
-
-            var padded = (i + 1) < 10 ? '0' + (i + 1) : String(i + 1);
-
-            item.innerHTML = [
-                '<span class="macro-step-drag-handle" title="Drag to reorder">⠿</span>',
-                '<span class="macro-step-index">' + padded + '</span>',
-                '<span class="macro-step-name">' + escHtml(step.name) + '</span>',
-                '<div class="macro-step-delay-wrap">',
-                    '<span>MS</span>',
-                    '<input type="number" class="macro-step-delay" min="0" max="60000" step="100"',
-                        ' value="' + (step.delay || 0) + '" data-step-delay="' + step.id + '">',
-                '</div>',
-                '<button class="btn-icon del-icon" data-step-remove="' + step.id + '" title="Remove step">✕</button>'
-            ].join('');
-
-            // Drag-reorder events
-            item.addEventListener('dragstart', function(e) {
-                macroDragSrcIndex = i;
-                e.dataTransfer.effectAllowed = 'move';
-            });
-            item.addEventListener('dragover', function(e) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                chain.querySelectorAll('.macro-step').forEach(function(s) { s.classList.remove('drag-over'); });
-                item.classList.add('drag-over');
-            });
-            item.addEventListener('dragleave', function() {
-                item.classList.remove('drag-over');
-            });
-            item.addEventListener('drop', function(e) {
-                e.preventDefault();
-                item.classList.remove('drag-over');
-                if (macroDragSrcIndex === null || macroDragSrcIndex === i) return;
-                var moved = state.macroChain.splice(macroDragSrcIndex, 1)[0];
-                state.macroChain.splice(i, 0, moved);
-                macroDragSrcIndex = null;
-                renderMacroChain();
-            });
-            item.addEventListener('dragend', function() {
-                chain.querySelectorAll('.macro-step').forEach(function(s) { s.classList.remove('drag-over'); });
-                macroDragSrcIndex = null;
-            });
-
-            chain.appendChild(item);
-        });
-
-        // Bind step events
-        chain.querySelectorAll('[data-step-delay]').forEach(function(inp) {
-            inp.addEventListener('change', function() {
-                var step = state.macroChain.find(function(s) { return s.id === inp.dataset.stepDelay; });
-                if (step) step.delay = Math.max(0, parseInt(inp.value) || 0);
-            });
-        });
-        chain.querySelectorAll('[data-step-remove]').forEach(function(btn) {
-            btn.addEventListener('click', function() { removeMacroStep(this.dataset.stepRemove); });
-        });
-
-        rebuildMacroPicker();
-    }
-
-    function castMacro() {
-        if (state.macroChain.length === 0) {
+        if (steps.length === 0) {
             logConsole('info', '> MACRO: NO STEPS TO CAST');
+            if (onComplete) {
+                onComplete({
+                    macroId: config.id || null,
+                    name: macroName,
+                    onError: onError,
+                    success: false,
+                    halted: false,
+                    failedStep: null,
+                    historyCode: historyCode,
+                    steps: []
+                });
+            }
             return;
         }
-
-        var steps   = state.macroChain.slice();
-        var onError = (document.getElementById('macro-on-error') || {}).value || 'abort';
-        var macroName = ((document.getElementById('macro-name-input') || {}).value || 'MACRO').trim().toUpperCase() || 'MACRO';
-        var i = 0;
 
         logConsole('run', '> CASTING MACRO: ' + macroName + ' (' + steps.length + ' STEPS)');
+        steps.forEach(function(step) { setStepStatus(step.id, null); });
 
-        // Reset all step statuses
-        steps.forEach(function(s) { setStepStatus(s.id, 'running'); });
-        steps.forEach(function(s) { setStepStatus(s.id, null); });
+        function finish(summaryError, haltedStep) {
+            var failed = results.filter(function(result) { return !result.success; });
+            var success = failed.length === 0;
+            var summary = {
+                macroId: config.id || null,
+                name: macroName,
+                onError: onError,
+                success: success,
+                halted: !!haltedStep,
+                failedStep: haltedStep ? {
+                    index: haltedStep.index,
+                    id: haltedStep.id,
+                    name: haltedStep.name
+                } : null,
+                historyCode: historyCode,
+                steps: results
+            };
+
+            if (success) {
+                logConsole('success', '> OK: MACRO COMPLETE (' + steps.length + ' STEPS)');
+                addToHistory(macroName, historyCode, true, null);
+            } else if (haltedStep) {
+                logConsole('error', '> MACRO ABORTED AT STEP ' + (haltedStep.index + 1) + ': ' + haltedStep.name);
+                addToHistory(macroName, historyCode, false, summaryError || { message: 'Macro aborted.' });
+            } else {
+                logConsole('error', '> MACRO COMPLETE WITH ERRORS (' + failed.length + ' FAILED STEP(S))');
+                addToHistory(macroName, historyCode, false, {
+                    message: 'Macro completed with ' + failed.length + ' failed step(s).'
+                });
+            }
+
+            if (onComplete) onComplete(summary);
+        }
 
         function runNext() {
-            if (i >= steps.length) {
-                logConsole('success', '> ✓ MACRO COMPLETE — ' + steps.length + ' steps');
-                addToHistory(macroName, '[MACRO: ' + steps.map(function(s) { return s.name; }).join(' → ') + ']', true, null);
+            if (index >= steps.length) {
+                finish(null, null);
                 return;
             }
 
-            var step = steps[i];
+            var step = steps[index];
+            var delay = step.delay || 0;
+
             setStepStatus(step.id, 'running');
 
-            var delay = step.delay || 0;
             setTimeout(function() {
-                runScript(step.code, 'MACRO/' + step.name, function(ok, err) {
+                runScript(step.code, 'MACRO/' + step.name, function(ok, err, data) {
+                    var result = {
+                        index: index,
+                        id: step.id,
+                        scriptId: step.scriptId || '',
+                        name: step.name,
+                        delay: delay,
+                        success: ok,
+                        output: data && data.output ? data.output : '',
+                        logs: data && data.logs ? data.logs.slice() : [],
+                        duration: data && data.duration ? data.duration : 0,
+                        error: ok ? null : (err || (data && data.error) || { message: 'Unknown error' })
+                    };
+
+                    results.push(result);
                     setStepStatus(step.id, ok ? 'ok' : 'error');
 
                     if (!ok && onError === 'abort') {
-                        logConsole('error', '> ✗ MACRO ABORTED at step ' + (i + 1) + ': ' + step.name);
-                        addToHistory(macroName, '[MACRO ABORTED at step ' + (i + 1) + ']', false, err);
+                        finish(result.error, {
+                            index: index,
+                            id: step.id,
+                            name: step.name
+                        });
                         return;
                     }
 
-                    i++;
+                    index++;
                     runNext();
                 });
             }, delay);
@@ -1577,49 +2238,47 @@
         runNext();
     }
 
-    function saveMacro() {
-        if (state.macroChain.length === 0) {
-            logConsole('info', '> MACRO: NOTHING TO SAVE');
-            return;
-        }
-        var nameInp = document.getElementById('macro-name-input');
-        var name = (nameInp ? nameInp.value.trim() : '').toUpperCase() || 'MACRO';
+    // setStepStatus: no-ops safely when the macro step UI elements are absent.
+    // Called by executeMacro() to reflect per-step run state in the UI.
+    // With the builder tab removed there are no .macro-step elements to update,
+    // but the function must remain so executeMacro() continues to parse.
+    function setStepStatus(stepId, status) {
+        var el = document.querySelector('.macro-step[data-step-id="' + stepId + '"]');
+        if (!el) return;
+        el.classList.remove('step-running', 'step-ok', 'step-error');
+        if (status) el.classList.add('step-' + status);
+    }
 
-        var macro = {
-            id: 'macro_' + Date.now(),
-            name: name,
-            steps: JSON.parse(JSON.stringify(state.macroChain)),
-            onError: (document.getElementById('macro-on-error') || {}).value || 'abort',
-            created: Date.now()
-        };
-
-        state.macros.push(macro);
-        localStorage.setItem(STORAGE_MACROS, JSON.stringify(state.macros));
-        renderSavedMacros();
-        logConsole('success', '> ✓ MACRO SAVED: ' + name);
+    function castMacro(sourceMacro) {
+        executeMacro(getMacroConfig(sourceMacro));
     }
 
     function deleteMacro(id) {
         state.macros = state.macros.filter(function(m) { return m.id !== id; });
-        localStorage.setItem(STORAGE_MACROS, JSON.stringify(state.macros));
-        renderSavedMacros();
+        storage.setItem(STORAGE_MACROS, JSON.stringify(state.macros));
+        renderManageMacrosList();
     }
 
-    function loadMacro(id) {
-        var macro = state.macros.find(function(m) { return m.id === id; });
-        if (!macro) return;
-        state.macroChain = JSON.parse(JSON.stringify(macro.steps));
-        var nameInp = document.getElementById('macro-name-input');
-        if (nameInp) nameInp.value = macro.name;
-        var errSel = document.getElementById('macro-on-error');
-        if (errSel) errSel.value = macro.onError || 'abort';
-        renderMacroChain();
-        logConsole('info', '> MACRO LOADED: ' + macro.name);
+    // ============================================================
+    // MANAGE MACROS DIALOG
+    // Replaces the old MACRO tab. Users view and run/delete saved
+    // macros. New macros are created via Holy Agent ("chain these
+    // scripts and save as a macro").
+    // ============================================================
+    function openManageMacrosDialog() {
+        renderManageMacrosList();
+        var overlay = document.getElementById('modal-manage-macros');
+        if (overlay) overlay.classList.add('open');
     }
 
-    function renderSavedMacros() {
-        var list  = document.getElementById('saved-macros-list');
-        var empty = document.getElementById('saved-macros-empty');
+    function closeManageMacrosDialog() {
+        var overlay = document.getElementById('modal-manage-macros');
+        if (overlay) overlay.classList.remove('open');
+    }
+
+    function renderManageMacrosList() {
+        var list  = document.getElementById('manage-macros-list');
+        var empty = document.getElementById('manage-macros-empty');
         if (!list) return;
 
         list.innerHTML = '';
@@ -1635,10 +2294,9 @@
             item.className = 'saved-macro-item';
             item.innerHTML = [
                 '<span class="saved-macro-name">' + escHtml(macro.name) + '</span>',
-                '<span class="saved-macro-meta">' + macro.steps.length + ' STEPS</span>',
+                '<span class="saved-macro-meta">' + macro.steps.length + ' STEP' + (macro.steps.length !== 1 ? 'S' : '') + '</span>',
                 '<div class="saved-macro-actions">',
-                    '<button class="btn-icon run-icon" data-macro-cast="' + macro.id + '" title="Cast">▶</button>',
-                    '<button class="btn-icon" data-macro-load="' + macro.id + '" title="Load into builder">↩</button>',
+                    '<button class="btn-icon run-icon" data-macro-cast="' + macro.id + '" title="Run macro">▶</button>',
                     '<button class="btn-icon del-icon" data-macro-del="' + macro.id + '" title="Delete">✕</button>',
                 '</div>'
             ].join('');
@@ -1649,22 +2307,91 @@
             btn.addEventListener('click', function() {
                 var macro = state.macros.find(function(m) { return m.id === btn.dataset.macroCast; });
                 if (!macro) return;
-                // Load and immediately cast
-                state.macroChain = JSON.parse(JSON.stringify(macro.steps));
-                renderMacroChain();
-                castMacro();
+                closeManageMacrosDialog();
+                castMacro(macro);
+                flickerBtn(btn);
             });
         });
-        list.querySelectorAll('[data-macro-load]').forEach(function(btn) {
-            btn.addEventListener('click', function() { loadMacro(btn.dataset.macroLoad); });
-        });
+
         list.querySelectorAll('[data-macro-del]').forEach(function(btn) {
             btn.addEventListener('click', function() {
-                if (confirm('Delete macro "' + btn.closest('.saved-macro-item').querySelector('.saved-macro-name').textContent + '"?')) {
+                var row = btn.closest('.saved-macro-item');
+                var name = row ? row.querySelector('.saved-macro-name').textContent : 'this macro';
+                if (confirm('Delete macro "' + name + '"?')) {
                     deleteMacro(btn.dataset.macroDel);
                 }
             });
         });
+    }
+
+    // ============================================================
+    // MACRO PRO TIP TOAST
+    // One-time hint on panel load when saved macros exist.
+    // ============================================================
+    function maybeShowMacroProTip() {
+        if (state.macros.length === 0) return;
+        var dismissed = localStorage.getItem('hs_macro_tip_dismissed');
+        if (dismissed) return;
+
+        var toast = document.getElementById('macro-pro-tip');
+        if (!toast) return;
+
+        setTimeout(function() {
+            toast.classList.add('visible');
+        }, 1200);
+
+        var btnClose = document.getElementById('btn-macro-pro-tip-close');
+        if (btnClose) {
+            btnClose.addEventListener('click', function() {
+                toast.classList.remove('visible');
+                localStorage.setItem('hs_macro_tip_dismissed', '1');
+            });
+        }
+
+        // Auto-dismiss after 8 seconds
+        setTimeout(function() {
+            toast.classList.remove('visible');
+        }, 9200);
+    }
+
+    function initMacro() {
+        var stored = storage.getItem(STORAGE_MACROS);
+        if (stored) {
+            try { state.macros = JSON.parse(stored); } catch(e) { state.macros = []; }
+        }
+
+        state.macros = (state.macros || []).map(function(macro) {
+            return {
+                id: macro.id || ('macro_' + Date.now()),
+                name: macro.name || 'MACRO',
+                steps: cloneMacroSteps(macro.steps),
+                onError: macro.onError === 'continue' ? 'continue' : 'abort',
+                created: macro.created || Date.now()
+            };
+        });
+
+        // Wire the Manage Macros dialog
+        var btnManage = document.getElementById('btn-manage-macros');
+        if (btnManage) {
+            btnManage.addEventListener('click', openManageMacrosDialog);
+        }
+
+        var btnClose = document.getElementById('btn-manage-macros-close');
+        if (btnClose) {
+            btnClose.addEventListener('click', closeManageMacrosDialog);
+        }
+
+        // Close on overlay backdrop click
+        var overlay = document.getElementById('modal-manage-macros');
+        if (overlay) {
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) closeManageMacrosDialog();
+            });
+        }
+
+        // Escape key closes the dialog (handled in global keydown listener)
+
+        maybeShowMacroProTip();
     }
 
     // ============================================================
@@ -1762,7 +2489,8 @@
     // ============================================================
     // INIT
     // ============================================================
-    function init() {
+    function finishInit() {
+        initAccentColor();
         initEditor();
         initTabs();
         initEventListeners();
@@ -1773,6 +2501,7 @@
         initMacro();
         initDragDrop();
         initContextBar();
+        updateAgentLibraryToggle();
 
         // Force CM layout after panel is shown
         if (editor) {
@@ -1787,6 +2516,10 @@
         }
 
         console.log('[Holy Scripture] Initialised. CEP:', isInCEP);
+    }
+
+    function init() {
+        reloadHostScript(finishInit);
     }
 
     document.addEventListener('DOMContentLoaded', init);

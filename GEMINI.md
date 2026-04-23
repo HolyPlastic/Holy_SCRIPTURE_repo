@@ -32,11 +32,10 @@ A Techno-Brutalist Adobe After Effects CEP panel designed for writing, storing, 
 | `Docs/features/03-library.md` | Persistent storage area for saved scripts and categories. |
 | `Docs/features/04-history.md` | Execution log with replay capability. |
 | `Docs/features/05-params.md` | UI for injecting variables into scripts (Currently undeveloped). |
-| `Docs/features/06-macro.md` | Macro execution layer (builder UI removed 2026-04-13 — manage via MACROS dialog). |
+| `Docs/features/06-macro.md` | UI for chaining multiple scripts together (Currently undeveloped). |
 | `Docs/features/07-host-context.md` | The top bar polling system that reads live After Effects comp data. |
 | `Docs/features/08-drag-drop.md` | File import via drag and drop (Unfinished module / TBC). |
 | `Docs/features/09-agent-library.md` | Curated read-only script library for Holy Agent / orchestration callers. |
-| `Docs/features/10-settings.md` | Modeless settings panel with HSV colour picker, favourites, and default accent swatch. |
 
 ---
 
